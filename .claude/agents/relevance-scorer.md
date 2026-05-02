@@ -18,6 +18,7 @@ Provided in your prompt:
 - `query` (string, required): the original user query
 - `hits_data` (JSON, required): the search results array, passed inline — do not read any file
 - `effort` (low|moderate|high, required): controls the relevance threshold for filtering
+- `max_matches` (integer, optional): hard cap on files returned; when set, keep only the top N after threshold filtering, prioritizing `highly_relevant` over `relevant` over `marginally_relevant`
 
 ## Behavior
 
@@ -32,7 +33,8 @@ Provided in your prompt:
    - `low`: return `highly_relevant` only
    - `moderate`: return `highly_relevant` + `relevant`
    - `high`: return all above `not_relevant`
-5. Do all scoring in a single pass over the hits data. Do not re-read the file.
+5. If `max_matches` is set, truncate to that count after threshold filtering — highest-category files first.
+6. Do all scoring in a single pass over the hits data. Do not re-read the file.
 
 ## Output Contract
 

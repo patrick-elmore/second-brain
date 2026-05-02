@@ -27,6 +27,7 @@ Provided in your prompt from the caller:
   ]
   ```
 - `effort` (low|moderate|high, optional): informs depth and breadth of synthesis
+- `word_budget` (integer, optional): hard cap on output word count
 
 ## Behavior
 
@@ -35,6 +36,11 @@ Provided in your prompt from the caller:
 
 2. **Synthesize.**
    Write a markdown report that addresses the query based on what the sources say. Be direct and specific. Draw connections across sources when they exist. Do not pad with generic commentary.
+
+   Apply effort-scaled format:
+   - `low` (or `word_budget` ≤ 200): flat prose only — no headers, no bullet lists, one dense paragraph per distinct topic. Stop at the word budget. Ruthlessly prioritize the single most important finding per source.
+   - `moderate` (or `word_budget` ≤ 600): headers are acceptable. Bullet lists only when genuinely list-like. Stop at the word budget.
+   - `high` (no `word_budget`): full structure, comprehensive coverage, no length constraint.
 
 3. **Cite inline.**
    At each claim or paraphrase drawn from a source, add a citation immediately after: `[source: {relative_path}]`. Multiple citations on one sentence go comma-separated in one bracket: `[source: path1.md, source: path2.md]`.
