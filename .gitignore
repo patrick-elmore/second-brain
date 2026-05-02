@@ -1,0 +1,11 @@
+.context/
+.auth/
+tmp/
+index/
+__pycache__/
+
+# Claude Code runtime data (agent/skill/hook specs in .claude/ are committed)
+.claude/settings.local.json
+.claude/todos/
+.claude/worktrees/
+.claude/*.jsonl
