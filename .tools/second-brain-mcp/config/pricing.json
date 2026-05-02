@@ -1,0 +1,117 @@
+{
+  "_comment": "USD per 1M tokens. Tier applies based on input token count per request: 'standard' = up to 200000 input tokens, 'large_context' = over 200000. If a model has no 'large_context' entry, 'standard' applies regardless.",
+  "models": {
+    "claude-opus-4-7": {
+      "standard": {
+        "input": 5.00,
+        "output": 25.00,
+        "batch_input": 2.50,
+        "batch_output": 12.50,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.00,
+        "cache_hit": 0.50,
+        "batch_cache_write_5m": 3.125,
+        "batch_cache_write_1h": 5.00,
+        "batch_cache_hit": 0.25
+      },
+      "large_context": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.00,
+        "cache_hit": 0.50
+      }
+    },
+    "claude-opus-4-6": {
+      "standard": {
+        "input": 5.00,
+        "output": 25.00,
+        "batch_input": 2.50,
+        "batch_output": 12.50,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.00,
+        "cache_hit": 0.50,
+        "batch_cache_write_5m": 3.125,
+        "batch_cache_write_1h": 5.00,
+        "batch_cache_hit": 0.25
+      },
+      "large_context": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.00,
+        "cache_hit": 0.50
+      }
+    },
+    "claude-opus-4-5": {
+      "standard": {
+        "input": 5.00,
+        "output": 25.00,
+        "batch_input": 2.50,
+        "batch_output": 12.50,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.00,
+        "cache_hit": 0.50,
+        "batch_cache_write_5m": 3.125,
+        "batch_cache_write_1h": 5.00,
+        "batch_cache_hit": 0.25
+      }
+    },
+    "claude-sonnet-4-6": {
+      "standard": {
+        "input": 3.00,
+        "output": 15.00,
+        "batch_input": 1.50,
+        "batch_output": 7.50,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.00,
+        "cache_hit": 0.30,
+        "batch_cache_write_5m": 1.88,
+        "batch_cache_write_1h": 3.00,
+        "batch_cache_hit": 0.15
+      },
+      "large_context": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.00,
+        "cache_hit": 0.30
+      }
+    },
+    "claude-sonnet-4-5": {
+      "standard": {
+        "input": 3.00,
+        "output": 15.00,
+        "batch_input": 1.50,
+        "batch_output": 7.50,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.00,
+        "cache_hit": 0.30,
+        "batch_cache_write_5m": 1.88,
+        "batch_cache_write_1h": 3.00,
+        "batch_cache_hit": 0.15
+      },
+      "large_context": {
+        "input": 6.00,
+        "output": 22.50,
+        "cache_write_5m": 7.50,
+        "cache_write_1h": 12.00,
+        "cache_hit": 0.60
+      }
+    },
+    "claude-haiku-4-5": {
+      "standard": {
+        "input": 1.00,
+        "output": 5.00,
+        "batch_input": 0.50,
+        "batch_output": 2.50,
+        "cache_write_5m": 1.25,
+        "cache_write_1h": 2.00,
+        "cache_hit": 0.10,
+        "batch_cache_write_5m": 0.625,
+        "batch_cache_write_1h": 1.00,
+        "batch_cache_hit": 0.05
+      }
+    }
+  }
+}

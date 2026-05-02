@@ -1,0 +1,27 @@
+{
+  "service_name": "SecondBrainHttpMcp",
+  "display_name": "Second Brain HTTP MCP",
+  "description": "Persistent-session knowledge retrieval over local source folders",
+  "http_host": "0.0.0.0",
+  "http_port": 9998,
+  "mcp_timeout": 120,
+  "log_level": "INFO",
+  "enable_logging": true,
+
+  "second_brain": {
+    "anthropic_api_key_env": "ANTHROPIC_API_KEY",
+    "fts_db_path": "index/fts.db",
+    "requests_db_path": "index/requests.db",
+    "session_state_path": "index/session-state.json",
+    "sources_config": "config/sources.json",
+
+    "default_model": "claude-haiku-4-5",
+    "escalation_model": "claude-sonnet-4-6",
+    "compact_threshold_tokens": 150000,
+
+    "state_persist_every_n_messages": 5,
+    "state_backup_count": 5,
+
+    "index_max_bytes": 5000000
+  }
+}

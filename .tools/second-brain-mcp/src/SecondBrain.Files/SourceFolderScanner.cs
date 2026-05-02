@@ -1,0 +1,75 @@
+using SecondBrain.Files.Models;
+
+namespace SecondBrain.Files;
+
+public sealed class SourceFolderScanner
+{
+    public IEnumerable<SourceFile> Scan(SourceFolder folder, int maxBytes)
+    {
+        if (!Directory.Exists(folder.AbsolutePath))
+            yield break;
+
+        foreach (var filePath in EnumerateFiles(folder.AbsolutePath, folder.ExcludeSubfolders))
+        {
+            FileInfo info;
+            try
+            {
+                info = new FileInfo(filePath);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            if (!info.Exists)
+                continue;
+
+            if (info.Length > maxBytes)
+                continue;
+
+            var relative = Path.GetRelativePath(folder.AbsolutePath, filePath);
+            var mtime = info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds;
+
+            yield return new SourceFile(
+                SourceFolderId: folder.Id,
+                AbsolutePath: filePath,
+                RelativePath: relative,
+                SizeBytes: info.Length,
+                MTime: mtime);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateFiles(string root, IReadOnlySet<string> excludeSubfolders)
+    {
+        IEnumerable<string> entries;
+        try
+        {
+            entries = Directory.EnumerateFileSystemEntries(root);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            yield break;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            yield break;
+        }
+
+        foreach (var entry in entries)
+        {
+            if (Directory.Exists(entry))
+            {
+                var dirName = Path.GetFileName(entry);
+                if (excludeSubfolders.Contains(dirName))
+                    continue;
+
+                foreach (var nested in EnumerateFiles(entry, excludeSubfolders))
+                    yield return nested;
+            }
+            else
+            {
+                yield return entry;
+            }
+        }
+    }
+}
