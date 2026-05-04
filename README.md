@@ -1,80 +1,293 @@
 # second-brain
 
-A personal knowledge retrieval system built on SQLite FTS5 and Claude Code agents. Given a natural-language query, it searches a BM25-ranked index across configured source folders, scores results for relevance, and synthesizes a structured report — all driven by a single Claude Code skill invocation.
+A personal knowledge retrieval system. Indexes meeting transcripts, daily notes, planning docs, and other personal artifacts into a local SQLite/FTS5 database, then exposes them through a long-running HTTP MCP service that wraps a persistent Claude session.
+
+You can hit the service two ways:
+- **As a human**, via the `/brain` skill in any Claude Code session.
+- **As an agent**, by calling MCP tools on the `second-brain` server directly. The service is the same; the skill is a thin wrapper.
+
+If you are an agent reading this README to learn the interface, jump to [MCP tools](#mcp-tools). The persistent-session model is documented in [The persistent session](#the-persistent-session) — agents must understand it before invoking `ask` repeatedly.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────┐        ┌────────────────────────────────────┐
+│  Claude Code session    │        │  SecondBrainHttpMcp (Windows svc)  │
+│  /brain or direct MCP   │  HTTP  │  ASP.NET Core 10  •  port 9998     │
+│  tool call              │ ─────▶ │  ┌──────────────────────────────┐  │
+└─────────────────────────┘        │  │ MCP JSON-RPC handler         │  │
+                                   │  │  ├─ search   (FTS5 only)     │  │
+                                   │  │  ├─ ask      (persistent     │  │
+                                   │  │  │           Claude session) │  │
+                                   │  │  ├─ compact_session          │  │
+                                   │  │  ├─ reset_session            │  │
+                                   │  │  ├─ session_info             │  │
+                                   │  │  ├─ get_request              │  │
+                                   │  │  └─ rebuild_index            │  │
+                                   │  └──────────────┬───────────────┘  │
+                                   │                 │                  │
+                                   │  ┌──────────────▼───────────────┐  │
+                                   │  │  Persistent ClaudeSession    │  │
+                                   │  │   • messages on disk         │  │
+                                   │  │   • cache_control breakpoints│  │
+                                   │  │   • internal tools:          │  │
+                                   │  │       search, read_file      │  │
+                                   │  └──────────────┬───────────────┘  │
+                                   │                 │                  │
+                                   │       ┌─────────┼─────────┐        │
+                                   │       ▼         ▼         ▼        │
+                                   │   ┌──────┐ ┌────────┐ ┌─────────┐  │
+                                   │   │fts.db│ │requests│ │session- │  │
+                                   │   │      │ │  .db   │ │state.json│ │
+                                   │   └──────┘ └────────┘ └─────────┘  │
+                                   └────────────────────────────────────┘
+                                                    ▲
+                                                    │ Claude API
+                                                    │ (Vertex AI or
+                                                    │  direct Anthropic)
+```
+
+- **Service**: `SecondBrainHttpMcp`, ASP.NET Core 10, listens on `0.0.0.0:9998`. Runs as a Windows service installed at `%LOCALAPPDATA%\SecondBrainMcpServer\`.
+- **Index**: a SQLite database with one FTS5 virtual table for content + a regular `files` table for metadata. Built once by the `SecondBrain.IndexBuilder` console app, then read-only at query time.
+- **Persistent session**: a single in-process `ClaudeSession` accumulates messages across every `ask` call. State is persisted to `index/session-state.json` after each call and restored on service restart.
+- **Inference**: Claude via Vertex AI (default in this install) or direct Anthropic API. Routing decided by `CLAUDE_CODE_USE_VERTEX` environment variable.
+
+---
 
 ## Quick start
 
+### Human — slash command
+
 ```
-/brain what were the action items from the rollout meeting
-/brain --effort high what has the team said about Atlas requirements
-/brain --effort low uvw lite
+/brain what did we decide about Atlas this week
+/brain --effort medium summarize the last three weekly 1:1s with my manager
+/brain search atlas --filter type:transcript --filter date:2026-04-01..
+/brain info
 ```
 
-Run from a Claude Code session opened in this repo. The `--effort` flag scales thoroughness and cost (see [Effort levels](#effort-levels)).
+The `/brain` skill at `~/.claude/skills/brain/SKILL.md` is a thin wrapper around the MCP tools — see [The skill](#the-skill).
+
+### Agent — direct MCP
+
+The `second-brain` MCP server is registered in `~/.claude.json` (added automatically by `install.ps1`). Once registered, an agent invokes tools using the standard `mcp__second-brain__<tool>` interface.
+
+```jsonc
+// Bare-minimum search
+mcp__second-brain__search({ "query": "atlas requirements" })
+
+// LLM-mediated synthesis
+mcp__second-brain__ask({
+  "question": "What did the team decide about Atlas requirements this week?",
+  "effort": "medium"
+})
+```
+
+The service is a long-running Windows daemon. It is always-on and stateful between calls — agents do not need to bootstrap or initialize it. They do, however, need to understand that `ask` shares state with every other ask: see [The persistent session](#the-persistent-session) before chaining ask calls.
 
 ---
 
-## Setup
+## MCP tools
 
-### Prerequisites
+All seven tools are exposed via JSON-RPC at `POST /mcp`. The service implements the MCP `initialize`, `tools/list`, and `tools/call` methods. Every tool returns a `request_id` (search, ask) or status payload that callers can inspect later.
 
-- Claude Code
-- Python 3.8+ (stdlib only — no pip packages required)
-- SQLite with FTS5 support (verified present: Python 3 + SQLite 3.41+)
+### `search` — deterministic FTS5
 
-### First run
+No LLM involvement. Runs an FTS5 query (or filter-only query) against `fts.db`, joins to `files` for metadata, and returns ranked hits with snippets.
 
-**1. Configure sources** — edit `config/sources.json` to point at your source folders (see [Source configuration](#source-configuration)).
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `query` | string | none | FTS5 syntax. Optional if you only want filtered enumeration. |
+| `date_start` | string | none | `YYYY-MM-DD`. Filters on `metadata.created`. |
+| `date_end` | string | none | `YYYY-MM-DD`. Filters on `metadata.created`. |
+| `people` | string[] | none | Substring match against `metadata.attendees` (array or scalar). |
+| `source_type` | string[] | none | One of `transcript`, `note`, `1on1`, `standup`, `planning`. |
+| `source_folders` | string[] | none | Restrict to specific source folder IDs (see `sources.json`). |
+| `top` | integer | 30 | Result cap. |
+| `snippet_tokens` | integer | 32 | Tokens of context per snippet. Clamped to `[1, 64]`. |
+| `return_mode` | string | `snippets` | `snippets` or `paths`. `paths` returns no snippet text. |
+| `list_sources` | boolean | false | When true, includes a `sources_summary` rollup grouping hits by `source_folder_id`. |
 
-**2. Build the index** — run once from the repo root:
+**FTS5 syntax cheat sheet** (porter unicode61 tokenizer — case-insensitive, English-stemmed):
+- `atlas requirements` — both terms (implicit AND)
+- `"atlas requirements"` — exact phrase
+- `atlas OR sagemaker` — either
+- `auth*` — prefix match
+- `(login OR signin) flow` — grouping
+- `atlas NEAR/3 requirement` — within 3 tokens
 
-```bash
-python3 scripts/index-build.py
+BM25 weights are biased toward the path column (10.0) over content (1.0), so a hit in the file path outranks a hit only in the body.
+
+**Returns:**
+```jsonc
+{
+  "request_id": "a1b2c3d4",
+  "hits": [
+    {
+      "absolute_path": "C:\\data\\...\\2026-04-12 Standup.md",
+      "relative_path": "Granola/Transcripts/2026-04-12 Standup.md",
+      "source_folder_id": "personal-notes",
+      "score": -8.42,                  // BM25; lower = more relevant
+      "metadata": { "type": "standup", "attendees": ["..."], "created": "2026-04-12" },
+      "matches": [{ "snippet": "...the team decided to <<atlas>> for inference..." }]
+    }
+  ],
+  "sources_summary": [                 // present only when list_sources=true
+    { "source_folder_id": "personal-notes", "hit_count": 7 }
+  ]
+}
 ```
 
-This walks all configured sources, indexes every UTF-8 text file under 5 MB into `index/fts.db`, and prints a JSON summary:
+### `ask` — persistent-session synthesis
 
-```json
-{"indexed": 4775, "skipped_size": 1, "skipped_binary": 94, "total_bytes_indexed": 74001654, "elapsed_seconds": 67.35, "db_path": "index/fts.db"}
+Routes a question through the in-process Claude session. The session has its own internal tools (`search`, `read_file`) that the model invokes autonomously to find evidence and read full files. Synthesis text is returned as `synthesis`.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `question` | string | **required** | Natural-language query. |
+| `compact_instruction` | string | none | If provided, the session is compacted with this instruction before answering. |
+| `effort` | string | `low` | `low` / `medium` / `high`. See [Effort levels](#effort-levels). |
+
+**Returns:**
+```jsonc
+{
+  "request_id": "1f2a3b4c",
+  "synthesis": "...markdown answer with [source: relative/path/to/file.md] citations...",
+  "model_used": "claude-haiku-4-5",
+  "tools_called": 4,                  // # of internal search/read_file calls
+  "files_referenced": [               // every file the session opened during this ask
+    "C:\\data\\...\\2026-04-12 Standup.md",
+    "C:\\repos\\...\\.context\\atlas-decision.md"
+  ]
+}
 ```
 
-The index is gitignored and must be rebuilt on each machine. Rebuild whenever source content changes significantly (no incremental sync — it's a full rebuild).
+`files_referenced` is the agent's audit trail — exactly which sources fed the synthesis, in absolute-path form. Pair it with `get_request` later if you need to revisit.
 
-**3. Open Claude Code** in this repo and invoke `/brain`.
+### `compact_session` — collapse history
+
+Runs the session's prior conversation through the compaction model (`claude-sonnet-4-6` by default) and replaces the message list with a single summary. Preserves session continuity at lower token cost.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `instruction` | string | none | Additional steering for what to keep. The standard prompt is always applied first. |
+
+**Returns:** `messages_before`, `messages_after`, `approximate_tokens_before`, `approximate_tokens_after`.
+
+Compaction also fires automatically when `approximate_tokens` exceeds the threshold (default 150,000) at the start of an `ask`.
+
+### `reset_session` — wipe state
+
+Clears all messages and counters in memory, persists the empty state to disk. Use when starting a genuinely new line of inquiry where prior context would only confuse the model.
+
+**Returns:** `{"status": "reset"}`.
+
+### `session_info` — inspect
+
+Returns metadata about the current persistent session: message count, approximate token count, current default model, and timestamps for `last_compacted`, `last_activity`, `state_persisted_at`.
+
+### `get_request` — fetch a stored request
+
+Both `search` and `ask` persist their request + response to `requests.db`. `get_request` retrieves a record by ID.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `request_id` | string | **required** | Returned by an earlier `search` or `ask`. |
+| `fields` | string[] | all | Optional projection: any subset of `query`, `filters`, `timestamp`, `tool`, `files`, `synthesis`, `result_count`. |
+
+**Returns:** the requested fields plus `request_id`. For `tool=search`, `files` is the ranked hit list at query time. For `tool=ask`, `synthesis` is the rendered answer and `files` is the post-hoc `files_referenced` capture.
+
+### `rebuild_index` — refresh fts.db
+
+Updates the FTS5 index in place against the current `sources.json`. Two modes:
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | string | `incremental` | `incremental` walks every source folder, then adds new files, refreshes files whose mtime is newer than the indexed copy, and removes rows whose file no longer exists. `full` drops `files` + `files_fts` and rebuilds from scratch. |
+
+If the index file doesn't exist or has no `files` table when `incremental` is requested, the call falls back to a full rebuild and the response reports `mode: "full (fallback)"`.
+
+**Returns (incremental):**
+```jsonc
+{
+  "mode": "incremental",
+  "added": 3,
+  "modified": 7,
+  "removed": 1,
+  "unchanged": 4823,
+  "skipped": 0,           // failed reads (e.g., binary files newly placed in a source folder)
+  "elapsed_seconds": 2.41,
+  "db_path": "C:\\Users\\...\\index\\fts.db"
+}
+```
+
+**Returns (full):**
+```jsonc
+{
+  "mode": "full",
+  "indexed": 4831,
+  "skipped": 95,
+  "elapsed_seconds": 64.12,
+  "db_path": "C:\\Users\\...\\index\\fts.db"
+}
+```
+
+The MCP handler's per-call mutex serialises rebuilds against `ask` and `search`, and the database uses WAL mode so search readers operating in other connections aren't blocked. Adding a *new* source folder to `sources.json` will be picked up by the rebuild, but the in-memory `FileReader`'s allowed-roots set is only refreshed at service start — restart the service after the rebuild if you've added a folder you want the LLM's `read_file` tool to be able to access.
 
 ---
 
-## Usage
+## The persistent session
 
-```
-/brain [--effort low|moderate|high] <query>
-```
+`ask` is fundamentally different from `search`. Treat it as a long-running chat, not a stateless RPC:
 
-| Flag | Default | Effect |
-|---|---|---|
-| `--effort low` | | Fast, cheap, narrow. 15 candidates, 3-file cap, 200-word output. |
-| `--effort moderate` | ✓ | Balanced. 30 candidates, 8-file cap, 600-word output. |
-| `--effort high` | | Thorough. 50 candidates, unlimited files, full synthesis. |
+- **Every `ask` appends to the same conversation.** The model sees prior questions, prior tool results, and prior answers. Follow-up questions like "elaborate on the third point" or "narrow that to 2026" work without re-stating prior context.
+- **The conversation is replayed on every call.** Each ask sends the entire message history to the API. Token count grows monotonically until compaction or reset.
+- **Auto-compact at 150K tokens.** When `approximate_tokens` ≥ 150,000 at the start of an `ask`, compaction runs first. The full message log becomes a single summary message before the new question is appended.
+- **Disk persistence is unconditional.** State is written to `index/session-state.json` after every `ask` and after every `compact`/`reset`. Restarting the service preserves the conversation.
+- **Prompt caching is on.** Three `cache_control: ephemeral` breakpoints are placed per request: on the system prompt, on the last tool definition, and on the last message. Cache hits drop input cost by ~10× on Sonnet/Opus and ~10× on Haiku, but only fire above the per-model minimum prefix size (4096 tokens for Haiku 4.5, 1024 for Sonnet/Opus). Short conversations don't cache.
+- **Internal tools are not the MCP tools.** Inside `ask`, the model uses its own `search` and `read_file` tools defined in `ToolDefinitions.cs`. These hit the same SearchEngine and FileReader as the MCP-level `search`, but they are invoked by the model, not the caller. Callers only see `tools_called` (a count) and `files_referenced` (paths) in the response.
 
-Everything downstream scales from effort: search breadth, snippet context given to the scorer, how many files pass through to synthesis, and how long the output is allowed to be. See [Effort levels](#effort-levels) for the complete table.
+Practical guidance for agents:
+
+- **Group related questions in one session.** Ask the broad question first, then drill in. The model already has the context loaded.
+- **Use `compact_session` between phases.** When you're done with one topic and moving to another, compact with an instruction like "keep the summary findings about Atlas; drop the search noise." Saves cost on subsequent calls.
+- **Use `reset_session` when topics are unrelated.** Don't pollute a "performance review evidence" thread with a one-off "what's the office WiFi password" query.
+- **Prefer `search` for one-shot lookups.** If you just need ranked file paths and snippets, `search` is cheaper, deterministic, and doesn't touch the session.
+
+---
+
+## Effort levels
+
+The `effort` arg on `ask` selects the API thinking budget. All three tiers run on the default model (`claude-haiku-4-5`); only the thinking effort changes. The escalation model is reserved for compaction.
+
+| `effort` | Model | API thinking effort | When to use |
+|---|---|---|---|
+| `low` (default) | `claude-haiku-4-5` | Low | Most queries. Fast and cheap; the model still searches, reads, and synthesizes — just with minimal deliberation. |
+| `medium` | `claude-haiku-4-5` | Medium | When the question requires more deliberation (comparing perspectives across sources, weighing evidence). |
+| `high` | `claude-haiku-4-5` | High | Long-form synthesis, performance-review style narratives, anything where output completeness matters more than latency. |
+
+The model and effort are recorded in the response (`model_used`) and in `requests.db`. Per-model token usage is tracked in `/stats`.
 
 ---
 
 ## Source configuration
 
-`config/sources.json` is an array of source entries. Two entry types are supported:
+`config/sources.json` (in the repo root) defines what the IndexBuilder ingests. The same file is copied into the install dir's `config/` on first install, and the running service reads it from there.
+
+Two entry shapes are supported:
 
 ### Static path
 
 ```json
 {
-  "id": "my-notes",
-  "path": "/absolute/path/to/notes",
+  "id": "personal-notes",
+  "path": "C:\\data\\your-data\\obsidian\\notes",
   "exclude_subfolders": [".obsidian"]
 }
 ```
 
-Indexes everything under `path`, optionally excluding named subdirectories.
+Indexes everything under `path`. Excluded subfolders are skipped at any depth.
 
 ### Dynamic discovery
 
@@ -82,346 +295,276 @@ Indexes everything under `path`, optionally excluding named subdirectories.
 {
   "id": "repos-context",
   "discover": {
-    "root": "/mnt/c/repos",
+    "root": "C:\\repos",
     "directory_name": ".context",
     "max_depth": 4
   }
 }
 ```
 
-Walks `root` up to `max_depth` directories deep and indexes every folder named `directory_name` it finds. Each discovered folder gets an ID in the format `repos-context:<relative-path>` (e.g., `repos-context:my-project/.context`).
+Walks `root` to `max_depth` directories deep, indexes every directory whose name matches `directory_name`. The same `id` is reused across every match — useful for grouping all `.context` folders across a workspace under one logical source.
 
-Both types coexist in the same config file. `lib.py` handles expansion at runtime, resolving dynamic entries to a flat list of concrete source paths before any indexing or searching begins.
-
-### Current sources
+### Currently configured sources
 
 | ID | Type | Root |
 |---|---|---|
-| `repos-context` | discover `.context` | `/mnt/c/repos` |
-| `misc-context` | discover `.context` | `/mnt/c/misc` |
-| `personal-notes` | static | `/mnt/c/data/your-data/obsidian/notes` |
+| `repos-context` | discover `.context` | `C:\repos` |
+| `misc-context` | discover `.context` | `C:\misc` |
+| `personal-notes` | static | `C:\data\your-data\obsidian\notes` |
 
 ---
 
 ## The FTS5 index
 
-The index lives at `index/fts.db` — a single SQLite database file. It is gitignored and machine-local.
+Two SQLite databases live under `index/` in the install directory:
 
-### Schema
+### `fts.db` — content index (drop-and-recreate)
 
 ```sql
 CREATE TABLE files (
     id                INTEGER PRIMARY KEY,
-    source_folder_id  TEXT NOT NULL,      -- e.g. "repos-context:my-project/.context"
+    source_folder_id  TEXT NOT NULL,
     absolute_path     TEXT NOT NULL UNIQUE,
-    relative_path     TEXT NOT NULL,      -- relative to the source root
+    relative_path     TEXT NOT NULL,
     size_bytes        INTEGER NOT NULL,
     mtime             REAL NOT NULL,
-    indexed_at        TEXT NOT NULL
+    indexed_at        TEXT NOT NULL,
+    source_type       TEXT,           -- transcript, standup, 1on1, planning, note
+    metadata          TEXT            -- JSON: parsed frontmatter
 );
 
-CREATE INDEX idx_files_source ON files(source_folder_id);
-
 CREATE VIRTUAL TABLE files_fts USING fts5(
-    path,       -- the relative path, searchable as text
-    content,    -- full file body
+    path,                              -- relative_path; weight 10.0 in BM25
+    content,                           -- file body; weight 1.0
     tokenize='porter unicode61'
 );
 ```
 
-`files` and `files_fts` share the same rowid. Searching `files_fts` with a `JOIN` on `files` returns full metadata alongside BM25 scores and FTS5-generated snippets.
+Built by `SecondBrain.IndexBuilder.exe` in a single transaction. Files larger than 5 MB and binary files are skipped.
 
-### Tokenizer
+### Frontmatter parsing
 
-`porter unicode61` applies two things:
+Two formats are recognized when populating `source_type` and `metadata`:
 
-- **unicode61**: case-folding and diacritic normalization. Queries are case-insensitive by default — no need for alternations.
-- **porter**: English stemming. `running` matches `run`, `runner`, `runs`. `authentication` matches `authenticate`, `authenticated`.
+1. **YAML frontmatter** — standard `---` block at the top of the file. `type:` field maps directly to `source_type`. `attendees:` populates the metadata for the `people` filter.
+2. **Bold-header format** — `**Type:** transcript` / `**Attendees:** Alice, Bob` as the first lines of a file (Granola transcript convention).
 
-### Query syntax
+When `type:` is absent, `source_type` is inferred from the title: `standup` → standup, `1:1`/`1on1`/`one-on-one` → 1on1, `planning` → planning, `transcript` → transcript.
 
-The pipeline uses FTS5 MATCH syntax, not regex:
+### `requests.db` — query history (persisted)
 
-| Syntax | Meaning |
-|---|---|
-| `uvw lite` | Both terms must appear (implicit AND) |
-| `"uvw lite"` | Exact phrase |
-| `uvw OR lite` | Either term |
-| `deploy*` | Prefix match: deploy, deployment, deploying |
-| `(auth OR login) token*` | Grouping |
+```sql
+CREATE TABLE requests (
+    id            TEXT PRIMARY KEY,
+    timestamp     TEXT NOT NULL,
+    tool          TEXT NOT NULL,       -- "search" or "ask"
+    query         TEXT,
+    filters_json  TEXT,
+    result_count  INTEGER NOT NULL,
+    synthesis     TEXT                 -- only populated for ask
+);
 
-Regex syntax (`.`, `.*`, `[A-Z]`, `\|` alternation) is not valid here.
+CREATE TABLE request_files (
+    request_id        TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    rank              INTEGER NOT NULL,
+    absolute_path     TEXT NOT NULL,
+    relative_path     TEXT NOT NULL,
+    source_folder_id  TEXT NOT NULL,
+    score             REAL,
+    PRIMARY KEY (request_id, rank)
+);
+```
+
+Every `search` and `ask` writes a row. `get_request` reads from these tables.
+
+### `session-state.json` — persistent ClaudeSession
+
+JSON file containing the serialized message list, approximate token count, and last-compacted timestamp. Restored on service start; rewritten after every `ask` / `compact` / `reset`.
 
 ---
 
-## Pipeline
+## HTTP endpoints
 
-Every `/brain` invocation runs this sequence in the main Claude Code session:
+Beyond the MCP JSON-RPC endpoint, the service exposes three GETs for diagnostics:
 
-```
-/brain <query>
-    │
-    ├─ 1. Parse flags & validate prerequisites
-    │
-    ├─ 2. Generate FTS5 query strings (inline, main session)
-    │
-    ├─ 3. index-search.py  ──────────────────────────────── BM25-ranked results
-    │       --patterns <p>  --top <N>  --snippet-tokens <T>
-    │
-    ├─ 4. [optional second pass if hits < 3 and effort ≠ low]
-    │       index-search.py + merge-search-results.py
-    │
-    ├─ 5. relevance-scorer agent ────────────────────────── filtered match list
-    │       hits_data: <inline JSON>
-    │       effort: low|moderate|high
-    │       max_matches: 3|8|unlimited
-    │
-    └─ 6. synthesis-agent ───────────────────────────────── markdown report
-            matches: [{source_path, relative_path, voice_source}]
-            effort: low|moderate|high
-            word_budget: 200|600|omit
-```
-
-### Step 1 — Parse and validate
-
-Extracts `--effort` (default: `moderate`) and query text from `$ARGUMENTS`. Verifies `config/sources.json` is non-empty and `index/fts.db` exists. Sweeps stale session files from `tmp/sessions/`.
-
-### Step 2 — FTS5 query generation (inline)
-
-The main session generates FTS5 query strings directly, without spawning a subagent. This saves ~3 seconds and ~29K tokens compared to the original search-planner agent design. Pattern count is effort-scaled: 1 pattern at low, 1-2 at moderate, 1-3 at high.
-
-The main session (Opus) is capable enough to produce valid FTS5 syntax. Explicit rules in the skill prevent regex-style patterns, which would trigger the sanitizer fallback in `index-search.py` and produce degraded results.
-
-### Step 3 — BM25 search
-
-`scripts/index-search.py` executes the FTS5 MATCH query, joins results against the `files` table, and returns a JSON array sorted by BM25 score (most relevant first). Each entry carries `source_folder_id`, `absolute_path`, `relative_path`, `score`, and a `matches` array with one snippet excerpt.
-
-BM25 score is negative — more negative means more relevant. The `LIMIT` clause caps results at the effort-scaled `--top` value.
-
-Multiple patterns are combined with OR: `(pattern1) OR (pattern2)`. If FTS5 rejects the query (syntax error), `index-search.py` falls back to a sanitized bare-word version of the query.
-
-### Step 4 — Second-pass search (conditional)
-
-If the primary search returns fewer than 3 hits and effort is not `low`, the main session generates broader alternative queries and runs a second search. Results are merged using `merge-search-results.py`, which deduplicates by `absolute_path` and combines match excerpts.
-
-At `effort=low`, the second pass is skipped entirely — if the first search finds nothing, the pipeline stops.
-
-### Step 5 — Relevance scoring
-
-The `relevance-scorer` agent (Haiku) receives the full hits JSON inline in its prompt — no file read required. It scores each file against the query using the snippet context, assigns a category, and returns only the files that clear the effort-level threshold:
-
-| Effort | Threshold | Max returned |
+| Method | Path | Purpose |
 |---|---|---|
-| low | `highly_relevant` only | 3 |
-| moderate | `highly_relevant` + `relevant` | 8 |
-| high | anything above `not_relevant` | unlimited |
+| POST | `/mcp` | JSON-RPC 2.0 entry point. Accepts `initialize`, `tools/list`, `tools/call`. |
+| GET | `/health` | `{"status": "healthy", "service": "SecondBrainHttpMcp", "version": "1.0.0"}`. Returns 503 if the handler isn't ready. |
+| GET | `/.well-known/mcp` | Discovery: protocol version, transport, endpoint URL. |
+| GET | `/stats` | HTML dashboard summarizing tool call counts (last 24h, by name), per-model LLM usage (requests, tokens, cache hits, estimated USD cost via `pricing.json`), file read counts, and process memory. |
+| GET | `/stats.json` | Same data as `/stats`, raw JSON for programmatic consumers. |
 
-When `max_matches` is set and more files qualify than the cap allows, the scorer returns the highest-category files first.
-
-The scorer also opportunistically notes `source_type` and `voice_source` per file when the snippet makes it obvious (e.g., transcript formatting). The synthesis agent uses `voice_source` to apply extra skepticism to unusual proper nouns and spellings.
-
-### Step 6 — Synthesis
-
-The `synthesis-agent` (Haiku / Sonnet / Opus, determined by effort) reads each matched source file directly from its original path on disk. No intermediate copies. It synthesizes a markdown report with inline citations (`[source: relative_path]`) and a trailing `## Sources` section listing absolute paths.
-
-Synthesis output is constrained by `word_budget`:
-
-| Effort | Model | Word budget | Format |
-|---|---|---|---|
-| low | Haiku | 200 | Flat prose, no headers |
-| moderate | Sonnet | 600 | Headers acceptable |
-| high | Opus | None | Full structure, comprehensive |
+`/stats` is useful for monitoring cost. The dashboard surfaces total estimated USD and a per-model breakdown with `cache_creation_tokens` and `cache_read_tokens` so you can verify caching is firing. Use `/stats.json` for the same data as raw JSON.
 
 ---
 
-## Effort levels
+## Configuration files
 
-All six dimensions scale together:
+### `config/mcp_config.json` (per-install)
 
-| Dimension | low | moderate | high |
-|---|---|---|---|
-| Search candidates (`--top`) | 15 | 30 | 50 |
-| Snippet context (`--snippet-tokens`) | 16 | 32 | 64 |
-| FTS5 query patterns | 1 | 1-2 | 1-3 |
-| Second-pass search | off | on | on |
-| Scorer output cap | 3 files | 8 files | unlimited |
-| Synthesis word budget | 200, flat prose | 600 | none |
-| Synthesis model | Haiku | Sonnet | Opus |
+Service-level settings. Read by `Program.cs` at startup. Lives at `%LOCALAPPDATA%\SecondBrainMcpServer\mcp_config.json`.
 
-Degradation at low effort is intentional. You get what you ask for.
+Key fields:
+- `service_name`, `display_name`, `description` — Windows service registration.
+- `http_host`, `http_port` — listen address. Default `0.0.0.0:9998`.
+- `mcp_timeout` — request timeout in seconds.
+- `log_level` — `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Logs go to `logs/second_brain_<timestamp>.log` next to the binary.
+- `second_brain.default_model` — default Claude model (`claude-haiku-4-5`).
+- `second_brain.escalation_model` — model used by the compactor (`claude-sonnet-4-6`). Not used by `ask`; all effort tiers run on `default_model`.
+- `second_brain.compact_threshold_tokens` — auto-compact trigger (`150000`).
+- `second_brain.fts_db_path`, `requests_db_path`, `session_state_path` — relative to install dir.
+- `second_brain.sources_config` — points at `config/sources.json` in the install dir.
+- `second_brain.index_max_bytes` — file-size cap for indexing (`5000000`).
 
----
+### `config/pricing.json` (versioned in repo)
 
-## Agents
+USD per 1M tokens, per Claude model, with both `standard` and `large_context` (>200K input tokens) tiers. Used by `PricingTable` to compute the cost numbers in `/stats`.
 
-Agent specs live in `.claude/agents/`. Authoring conventions are documented in `.claude/agents/AGENT-GUIDELINES.md`.
+### `config/sources.json` (versioned in repo)
 
-### `relevance-scorer`
+The source folder list — see [Source configuration](#source-configuration).
 
-**Model:** Haiku | **Effort:** medium
+### Environment variables (machine scope)
 
-Receives the BM25 search results as inline JSON in its prompt. Evaluates each file's snippet against the query. Returns a filtered, categorized match list. Never reads files from disk — the snippet context in the hits data is all it sees.
+The service runs as `LocalSystem` and only sees machine-scope env vars.
 
-Input: `query`, `hits_data` (JSON inline), `effort`, `max_matches` (optional cap).
-Output: `{matches: [{source_folder_id, absolute_path, relative_path, category, source_type, voice_source}]}`
-
-Disallowed tools: `Read, Write, Edit, MultiEdit, Bash, Grep, Glob` — it is a pure reasoning step over data already in the prompt.
-
-### `synthesis-agent`
-
-**Model:** Sonnet (default; caller overrides per effort) | **Effort:** high
-
-Reads matched source files from their original on-disk paths using `Read`. Synthesizes a markdown report with inline citations. Applies voice-source skepticism when `voice_source: true`. Enforces the word budget and format constraints passed by the caller.
-
-Input: `query`, `matches` (array of `{source_path, relative_path, voice_source}`), `effort`, `word_budget` (optional).
-Output: Markdown report with `[source: relative_path]` inline citations and `## Sources` section.
-
-Disallowed tools: `Bash, Edit, Write, MultiEdit` — reads source files only, produces no side effects.
+| Variable | Required when | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | direct Anthropic API | Read by the SDK. |
+| `CLAUDE_CODE_USE_VERTEX` | Vertex inference | Set to `1` to route through Vertex AI. |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | Vertex inference | GCP project ID. |
+| `CLOUD_ML_REGION` | Vertex inference | Vertex region (`global` works for Claude). |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Vertex inference | Path to the service account or ADC JSON the service can read. `LocalSystem` cannot see user-scoped gcloud ADC files; either copy/symlink the file or use a service account. |
 
 ---
 
-## Scripts
+## Service operations
 
-All scripts in `scripts/` are Python 3 stdlib only. Each prints JSON to stdout and errors to stderr with a non-zero exit code on failure. All are invoked from the repo root.
+### Install (one-time)
 
-### `index-build.py`
+From an admin PowerShell at `.tools/second-brain-mcp/`:
 
-Full rebuild of the FTS5 index. Drops and recreates `index/fts.db`. Walks all configured sources, skips binary files and files over `--max-bytes` (default 5 MB), indexes everything else. Single transaction for bulk insert performance.
-
-```bash
-python3 scripts/index-build.py [--config config/sources.json] [--db index/fts.db] [--max-bytes 5000000] [--verbose]
+```powershell
+.\install.ps1
 ```
 
-Output: `{indexed, skipped_size, skipped_binary, total_bytes_indexed, elapsed_seconds, db_path}`
+Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes both `SecondBrain.Mcp` and `SecondBrain.IndexBuilder` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), copies `pricing.json` and `sources.json`, registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
 
-### `index-search.py`
+After install, you must:
+1. Set `ANTHROPIC_API_KEY` (or the Vertex env vars) at machine scope.
+2. Build the index with `SecondBrain.IndexBuilder.exe <sources.json> <fts.db>`.
+3. `net start SecondBrainHttpMcp`.
 
-BM25-ranked search over the FTS5 index. Joins `files_fts` with `files` to return full metadata. Handles FTS5 syntax errors by falling back to a sanitized bare-word query. Reads the database in read-only mode.
+### Update (after code changes)
 
-```bash
-python3 scripts/index-search.py --patterns <p> [--patterns <p>...] [--top 50] [--snippet-tokens 32] [--db index/fts.db]
+```powershell
+.\update.ps1
 ```
 
-Output: JSON array of `{source_folder_id, absolute_path, relative_path, score, matches: [{line, snippet}]}`
+Stops the service, rebuilds, redeploys, leaves config and index in place, restarts.
 
-Exit codes: 0 = success, 2 = index missing, 3 = unrecoverable FTS5 syntax error.
+### Uninstall
 
-### `scan-sources.py`
-
-Enumerates all files across configured sources without indexing. Useful for auditing what the index would cover.
-
-```bash
-python3 scripts/scan-sources.py [--config config/sources.json] [--folder-id <id>]
+```powershell
+.\uninstall.ps1
 ```
 
-Output: JSON array of `{source_folder_id, absolute_path, relative_path}`
+Stops and removes the service, prompts before deleting the install directory.
 
-### `merge-search-results.py`
+### Rebuilding the index
 
-Merges two or more search result files, deduplicating by `absolute_path`. When the same file appears in multiple result sets, match excerpts are combined.
+The MCP exposes the `rebuild_index` tool — see [`rebuild_index`](#rebuild_index--refresh-ftsdb). Two ways to invoke:
 
-```bash
-python3 scripts/merge-search-results.py <file1.json> <file2.json> [...]
+```
+/brain rebuild                  # via the skill (incremental by default)
+/brain rebuild full             # nuclear rebuild
 ```
 
-Output: Merged JSON array.
+Or directly:
 
-### `lib.py`
-
-Shared module. Provides `load_expanded_config(config_path)` — loads `sources.json` and expands dynamic discover entries into concrete source paths. Provides `filter_by_folder_id(sources, folder_id)` — filters expanded sources by exact ID or discover-group prefix. Imported by all scripts that need source configuration.
-
-### `session-state-write.py` / `session-state-read.py` / `session-state-sweep.py`
-
-Persist, load, and expire named JSON blobs under `tmp/sessions/`. Sessions are 8-character hex IDs. `session-state-sweep.py` is called at the start of every `/brain` invocation to clean up files older than 7 days.
-
-### `folder-summary.py`
-
-Groups a file list by parent directory and returns the top-N folders by hit count. Used for debugging search result distributions.
-
-```bash
-python3 scripts/folder-summary.py [--top 5] < file-list.json
+```jsonc
+mcp__second-brain__rebuild_index({})                    // incremental
+mcp__second-brain__rebuild_index({ "mode": "full" })    // full
 ```
 
-Output: JSON array of `{folder, count}` sorted descending.
+If you'd rather rebuild from a shell (e.g., from a scheduled job that doesn't talk MCP), the standalone console app still works:
+
+```powershell
+& "$env:LOCALAPPDATA\SecondBrainMcpServer\SecondBrain.IndexBuilder.exe" `
+    "$env:LOCALAPPDATA\SecondBrainMcpServer\config\sources.json" `
+    "$env:LOCALAPPDATA\SecondBrainMcpServer\index\fts.db"
+```
+
+The console app is full-rebuild only. WAL mode lets it run while the service is up — readers may briefly see partial data mid-rebuild; stop the service first if that matters for your use case.
+
+### Restart cycle (without uninstall)
+
+```powershell
+net stop SecondBrainHttpMcp
+net start SecondBrainHttpMcp
+```
+
+The persistent session reloads from `session-state.json` on start.
+
+---
+
+## The skill
+
+`~/.claude/skills/brain/SKILL.md` is a thin parser that maps user input into MCP tool calls. The skill:
+
+1. Splits the first token off as a subcommand (`ask`, `search`, `compact`, `reset`, `info`, `get`). Defaults to `ask`.
+2. Strips known flags (`--effort`, `--filter`, `--top`, `--paths`, `--list-sources`, `--fields`).
+3. Dispatches to `mcp__second-brain__<tool>` with the parsed args.
+4. Renders the response in a human-readable format.
+
+Subcommands are 1:1 with MCP tools. The skill exists for convenience — the underlying capability is identical to direct MCP invocation.
+
+A staging copy lives at `.claude/skills/beta-brain/SKILL.md` in this repo. Edit-validate-promote loop: change `beta-brain`, exercise it via `/beta-brain`, then `cp` over the global `~/.claude/skills/brain/SKILL.md` to promote.
 
 ---
 
 ## Repository layout
 
 ```
-.claude/
-  agents/
-    AGENT-GUIDELINES.md     Authoring standards for all agent and skill specs
-    relevance-scorer.md     Relevance scoring agent spec
-    synthesis-agent.md      Report synthesis agent spec
-    search-planner.md       Legacy — no longer used by the pipeline
-  skills/
-    brain/
-      SKILL.md              /brain skill — main pipeline orchestration
-  hooks/                    Claude Code hook configuration
+README.md                              this file
+CLAUDE.md                              project-level guidance for Claude Code
+
 config/
-  sources.json              Source folder definitions
-scripts/
-  index-build.py            Build the FTS5 index (run once)
-  index-search.py           BM25 search over the index
-  scan-sources.py           Enumerate source files
-  merge-search-results.py   Merge and deduplicate search result sets
-  lib.py                    Shared config utilities
-  search-with-context.py    Legacy grep-based search — superseded by index-search.py
-  session-state-write.py    Persist session file lists
-  session-state-read.py     Load persisted session file lists
-  session-state-sweep.py    Delete stale session files
-  folder-summary.py         Group file paths by parent folder, return top-N counts
-index/
-  fts.db                    SQLite FTS5 database (gitignored, machine-local)
-tmp/
-  sessions/                 Session file lists (gitignored)
-  search-primary.json       Working file for current search pass
-  search-secondary.json     Working file for second-pass search
-  search-merged.json        Merged results when second-pass ran
+  sources.json                         source folder definitions
+
+.claude/
+  skills/beta-brain/SKILL.md           staging copy of the global /brain skill
+
+.tools/second-brain-mcp/               .NET solution
+  second-brain-mcp.slnx
+  install.ps1, update.ps1, uninstall.ps1
+  config/
+    mcp_config.json                    template; copied to install dir on first install
+    pricing.json                       per-model USD pricing for cost tracking
+  src/
+    SecondBrain.Files/                 source folder enumeration, file reading, frontmatter parsing
+    SecondBrain.Index/                 FTS5 schema, search engine, request history
+    SecondBrain.IndexBuilder/          console app: rebuild fts.db
+    SecondBrain.Llm/                   ClaudeSession, ToolLoop, Compactor, system prompts
+    SecondBrain.Mcp/                   ASP.NET Core host, MCP handler, /mcp + /health + /stats endpoints
+    SecondBrain.{Files,Index,Llm}.Tests/  xUnit test projects
+
+(install location, gitignored, machine-local)
+%LOCALAPPDATA%\SecondBrainMcpServer\
+  SecondBrain.Mcp.exe                  the service binary
+  SecondBrain.IndexBuilder.exe         the indexer binary
+  mcp_config.json                      live service config
+  config/
+    sources.json                       live source folder definitions
+    pricing.json                       live pricing data
+  index/
+    fts.db                             FTS5 content index
+    requests.db                        request/response history
+    session-state.json                 persistent ClaudeSession state
+    stats.json                         persisted /stats counters
+  logs/
+    second_brain_*.log                 Serilog output
 ```
 
----
-
-## Maintenance
-
-### Rebuilding the index
-
-The index is a full snapshot. There is no incremental sync. Rebuild it when:
-- Source files have changed significantly
-- New source folders were added to `config/sources.json`
-- The index is corrupt or missing
-
-```bash
-python3 scripts/index-build.py
-```
-
-On the current corpus (~4,800 files, ~74 MB of text), a full rebuild takes about 67 seconds.
-
-### Adding a source
-
-Add an entry to `config/sources.json`, then rebuild the index. The new source is searchable immediately after the rebuild.
-
-### Checking what's indexed
-
-```bash
-python3 scripts/scan-sources.py | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{len(d)} files')"
-```
-
-Or inspect the database directly:
-
-```bash
-python3 -c "import sqlite3; c=sqlite3.connect('index/fts.db'); print(c.execute('SELECT COUNT(*) FROM files').fetchone()[0], 'files')"
-```
-
----
-
-## Design notes
-
-**No corpus copies.** Earlier versions copied matched files into a local `corpus/` directory (hash-named) and maintained a `ledger/entries.json` registry. This was eliminated when FTS5 replaced grep as the search mechanism. The synthesis agent now reads source files directly from their original paths. The FTS5 index serves as the file registry.
-
-**Scripts for deterministic work, agents for reasoning.** The pipeline enforces a strict boundary. BM25 search, result merging, session state persistence — all scripts. Relevance judgment and report synthesis — agents. Agents never grep, hash, or write files directly.
-
-**Context discipline.** The main session stays lean by design. It reads the hits JSON once (to pass inline to the scorer), then discards it. It never reads source file bodies. Snippet content is confined to the scorer; file content is confined to the synthesis agent.
-
-**Effort as a first-class parameter.** Every stage in the pipeline is parameterized by effort. Widening a query from 1 pattern to 3, deepening snippet context from 16 to 64 tokens, uncapping the scorer output, and removing the word budget all happen together when effort increases. The levels are designed to feel meaningfully different, not just cosmetically different.
+The legacy Python `scripts/` directory and pre-MCP `index/` and `tmp/` folders at the repo root are vestigial — they are gitignored but harmless. The .NET service does not read them.

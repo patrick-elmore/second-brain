@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc;
 using SecondBrain.Mcp.Configuration;
 using SecondBrain.Mcp.Services;
+using SecondBrain.Mcp.Stats;
 
 namespace SecondBrain.Mcp.Endpoints;
 
@@ -58,6 +59,14 @@ public static class McpEndpoints
         });
 
         app.MapGet("/stats", ([FromServices] McpServiceState state) =>
+        {
+            if (state.StatsTracker == null)
+                return Results.Content("<h1>Stats not initialized</h1>", "text/html", statusCode: 503);
+            var html = StatsHtmlRenderer.Render(state.StatsTracker.GetStats());
+            return Results.Content(html, "text/html; charset=utf-8");
+        });
+
+        app.MapGet("/stats.json", ([FromServices] McpServiceState state) =>
         {
             if (state.StatsTracker == null)
                 return Results.Json(new { error = "Stats not initialized" }, statusCode: 503);

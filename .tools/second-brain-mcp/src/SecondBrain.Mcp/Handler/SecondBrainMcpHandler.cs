@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using SecondBrain.Index.Indexing;
 using SecondBrain.Index.RequestHistory;
 using SecondBrain.Index.Search;
 using SecondBrain.Llm;
@@ -16,6 +17,9 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
     private readonly RequestHistory _requestHistory;
     private readonly ILogger _logger;
     private readonly StatsTracker? _stats;
+    private readonly string _sourcesConfigPath;
+    private readonly string _ftsDbPath;
+    private readonly int _indexMaxBytes;
     private readonly SemaphoreSlim _mutex = new(1, 1);
 
     public bool IsHealthy => true;
@@ -24,12 +28,18 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         ClaudeSession session,
         SearchEngine searchEngine,
         RequestHistory requestHistory,
+        string sourcesConfigPath,
+        string ftsDbPath,
+        int indexMaxBytes,
         ILogger logger,
         StatsTracker? stats = null)
     {
         _session = session;
         _searchEngine = searchEngine;
         _requestHistory = requestHistory;
+        _sourcesConfigPath = sourcesConfigPath;
+        _ftsDbPath = ftsDbPath;
+        _indexMaxBytes = indexMaxBytes;
         _logger = logger;
         _stats = stats;
     }
@@ -109,7 +119,7 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
                 "reset_session" => HandleReset(),
                 "session_info" => HandleSessionInfo(),
                 "get_request" => HandleGetRequest(arguments),
-                "rebuild_index" => HandleRebuildIndex(),
+                "rebuild_index" => HandleRebuildIndex(arguments),
                 _ => ResponseBuilder.ToolResult($"Unknown tool: {toolName}", isError: true),
             };
 
@@ -303,10 +313,59 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         return ResponseBuilder.ToolResult(response.ToJsonString());
     }
 
-    private static JsonNode HandleRebuildIndex()
+    private JsonNode HandleRebuildIndex(JsonObject args)
     {
-        return ResponseBuilder.ToolResult(
-            "{\"status\":\"not_implemented\",\"message\":\"Use the SecondBrain.IndexBuilder console app to rebuild.\"}");
+        var mode = (args["mode"]?.GetValue<string>() ?? "incremental").ToLowerInvariant();
+
+        if (mode is not ("incremental" or "full"))
+            return ResponseBuilder.ToolResult(
+                $"{{\"error\":\"Unknown mode '{mode}'. Expected 'incremental' or 'full'.\"}}",
+                isError: true);
+
+        try
+        {
+            if (mode == "full")
+            {
+                var builder = new IndexBuilder();
+                var summary = builder.Build(_sourcesConfigPath, _ftsDbPath, _indexMaxBytes);
+                _logger.LogInformation(
+                    "rebuild_index full: indexed={Indexed} skipped={Skipped} elapsed={Elapsed}",
+                    summary.IndexedCount, summary.SkippedCount, summary.Elapsed);
+                var response = new JsonObject
+                {
+                    ["mode"] = "full",
+                    ["indexed"] = summary.IndexedCount,
+                    ["skipped"] = summary.SkippedCount,
+                    ["elapsed_seconds"] = Math.Round(summary.Elapsed.TotalSeconds, 2),
+                    ["db_path"] = summary.DbPath,
+                };
+                return ResponseBuilder.ToolResult(response.ToJsonString());
+            }
+
+            var updater = new IndexUpdater();
+            var update = updater.Update(_sourcesConfigPath, _ftsDbPath, _indexMaxBytes);
+            _logger.LogInformation(
+                "rebuild_index incremental: added={Added} modified={Modified} removed={Removed} unchanged={Unchanged} skipped={Skipped} fullRebuild={Full} elapsed={Elapsed}",
+                update.Added, update.Modified, update.Removed, update.Unchanged, update.Skipped, update.FullRebuild, update.Elapsed);
+            var resp = new JsonObject
+            {
+                ["mode"] = update.FullRebuild ? "full (fallback)" : "incremental",
+                ["added"] = update.Added,
+                ["modified"] = update.Modified,
+                ["removed"] = update.Removed,
+                ["unchanged"] = update.Unchanged,
+                ["skipped"] = update.Skipped,
+                ["elapsed_seconds"] = Math.Round(update.Elapsed.TotalSeconds, 2),
+                ["db_path"] = update.DbPath,
+            };
+            return ResponseBuilder.ToolResult(resp.ToJsonString());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "rebuild_index ({Mode}) failed", mode);
+            var errorJson = new JsonObject { ["error"] = ex.Message }.ToJsonString();
+            return ResponseBuilder.ToolResult(errorJson, isError: true);
+        }
     }
 
     private static SearchParams ParseSearchParams(JsonObject args)

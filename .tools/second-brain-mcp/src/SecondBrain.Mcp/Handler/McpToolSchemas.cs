@@ -52,7 +52,7 @@ internal static class McpToolSchemas
             {
                 ["question"] = Prop("string", "Question to answer using the knowledge corpus"),
                 ["compact_instruction"] = Prop("string", "If provided, compact session before answering"),
-                ["effort"] = Prop("string", "low (default; haiku/high), medium (sonnet/low), high (sonnet/high). Scales model + API thinking effort."),
+                ["effort"] = Prop("string", "low (default), medium, high. All run on the default model (haiku); selects the API thinking effort."),
             },
         },
     };
@@ -104,8 +104,15 @@ internal static class McpToolSchemas
     private static JsonObject RebuildIndexTool() => new()
     {
         ["name"] = "rebuild_index",
-        ["description"] = "Triggers a full rebuild of the FTS5 index. Stubbed in v1.",
-        ["inputSchema"] = new JsonObject { ["type"] = "object" },
+        ["description"] = "Update the FTS5 index. 'incremental' (default) adds new files, refreshes modified files, and removes files no longer present. 'full' drops the index and rebuilds from scratch.",
+        ["inputSchema"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["mode"] = Prop("string", "incremental (default) or full"),
+            },
+        },
     };
 
     private static JsonObject Prop(string type, string description) => new()

@@ -7,7 +7,15 @@ internal static class ToolDefinitions
 {
     public static IReadOnlyList<ToolUnion> Build()
     {
-        return [SearchTool(), ReadFileTool()];
+        // Cache breakpoint on the last tool — caches tool definitions across calls.
+        // Tools are stable, so this gives a guaranteed cache hit prefix.
+        return [SearchTool(), ReadFileToolCached()];
+    }
+
+    private static ToolUnion ReadFileToolCached()
+    {
+        var tool = (Tool)((ToolUnion)ReadFileTool()).Value!;
+        return tool with { CacheControl = new CacheControlEphemeral() };
     }
 
     private static ToolUnion SearchTool() => new Tool

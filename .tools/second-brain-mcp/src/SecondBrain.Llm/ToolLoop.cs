@@ -1,10 +1,12 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Anthropic;
 using Anthropic.Models.Messages;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using SecondBrain.Files;
 using SecondBrain.Index.Search;
+using SecondBrain.Llm.Prompts;
 
 namespace SecondBrain.Llm;
 
@@ -53,20 +55,53 @@ internal sealed class ToolLoop
 
         while (true)
         {
+            // Apply a cache breakpoint to the last message so subsequent calls
+            // (in this loop and in future asks) hit cache for the prior conversation.
+            var requestMessages = WithCacheBreakpointOnLast(messages);
+
+            // System prompt as a cacheable text block (caches across all calls).
+            var systemBlocks = new List<TextBlockParam>
+            {
+                new() { Text = SystemPrompt.Text, CacheControl = new CacheControlEphemeral() },
+            };
+
             var createParams = new MessageCreateParams
             {
                 Model = model,
                 MaxTokens = 8192,
-                Messages = messages,
+                Messages = requestMessages,
                 Tools = tools,
+                System = new MessageCreateParamsSystem(systemBlocks),
             };
             if (_supportsOutputConfig)
                 createParams = createParams with { OutputConfig = new OutputConfig { Effort = apiEffort } };
+
+            // DIAGNOSTIC: dump the actual API body (RawBodyData) so we can verify cache_control is being sent
+            try
+            {
+                var bodyJson = JsonSerializer.Serialize(createParams.RawBodyData);
+                _logger.LogInformation("API body length={Len} cache_control_count={CacheCount} body={Body}",
+                    bodyJson.Length,
+                    System.Text.RegularExpressions.Regex.Matches(bodyJson, "cache_control").Count,
+                    bodyJson.Length > 20000 ? bodyJson[..20000] + "...(truncated)" : bodyJson);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to serialize request for diagnostic logging");
+            }
 
             var response = await _client.Messages.Create(createParams, ct);
 
             inputTokens += response.Usage.InputTokens;
             outputTokens += response.Usage.OutputTokens;
+
+            _logger.LogInformation(
+                "API call: model={Model} input={Input} output={Output} cache_read={CacheRead} cache_create={CacheCreate}",
+                model,
+                response.Usage.InputTokens,
+                response.Usage.OutputTokens,
+                response.Usage.CacheReadInputTokens?.ToString() ?? "null",
+                response.Usage.CacheCreationInputTokens?.ToString() ?? "null");
 
             _stats?.RecordLlmCall(
                 model,
@@ -235,6 +270,59 @@ internal sealed class ToolLoop
         });
 
         return $"Found {result.Hits.Count} result(s):\n{string.Join("\n", parts)}";
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="messages"/> where the last entry has
+    /// <c>cache_control: { type: "ephemeral" }</c> on its last content block.
+    /// Done at JSON level to handle string-content and block-list-content uniformly
+    /// without grappling with the SDK's discriminated union types.
+    /// </summary>
+    private static List<MessageParam> WithCacheBreakpointOnLast(IReadOnlyList<MessageParam> messages)
+    {
+        if (messages.Count == 0) return [];
+        var copy = messages.ToList();
+        var last = copy[^1];
+
+        try
+        {
+            var json = JsonSerializer.SerializeToNode(last)?.AsObject();
+            if (json == null) return copy;
+
+            var content = json["content"];
+            switch (content)
+            {
+                case JsonArray arr when arr.Count > 0:
+                {
+                    if (arr[^1] is JsonObject lastBlock)
+                        lastBlock["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
+                    break;
+                }
+                case JsonValue v when v.GetValueKind() == JsonValueKind.String:
+                {
+                    // Convert string-content into a single text block with cache_control
+                    json["content"] = new JsonArray(new JsonObject
+                    {
+                        ["type"] = "text",
+                        ["text"] = v.GetValue<string>(),
+                        ["cache_control"] = new JsonObject { ["type"] = "ephemeral" },
+                    });
+                    break;
+                }
+                default:
+                    return copy;
+            }
+
+            var modified = JsonSerializer.Deserialize<MessageParam>(json.ToJsonString());
+            if (modified != null) copy[^1] = modified;
+        }
+        catch
+        {
+            // If anything fails, fall back to sending without cache_control on this message.
+            // The cached tools still apply.
+        }
+
+        return copy;
     }
 
     private string RunReadFile(ToolUseBlock toolUse, HashSet<string> filesThisTurn)

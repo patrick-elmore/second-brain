@@ -17,6 +17,7 @@ public sealed class ClaudeSession
     private readonly ToolLoop _toolLoop;
     private readonly Compactor _compactor;
     private readonly StatePersistence? _statePersistence;
+    private readonly ILogger _sessionLogger;
 
     private readonly List<MessageParam> _messages = [];
     private readonly string _defaultModel;
@@ -50,6 +51,7 @@ public sealed class ClaudeSession
         _escalationModel = escalationModel;
         _compactThresholdTokens = compactThresholdTokens;
         _persistEveryNMessages = persistEveryNMessages;
+        _sessionLogger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         _toolLoop = new ToolLoop(client, searchEngine, fileReader, logger, stats);
 
         RestoreState();
@@ -84,9 +86,10 @@ public sealed class ClaudeSession
 
         _approximateTokens += loopResult.InputTokensUsed + loopResult.OutputTokensUsed;
         _lastActivity = DateTime.UtcNow;
-        _messagesSinceLastPersist += 2; // user + assistant turns
 
-        MaybePersistState();
+        // Persist after every ask completes — the cost is trivial vs. the API call
+        // that just ran, and we want context to survive any restart.
+        PersistState();
 
         return new AskResult(
             RequestId: requestId,
@@ -145,14 +148,16 @@ public sealed class ClaudeSession
         StatePersistedAt: _statePersistedAt);
 
     // MCP effort -> (model, API OutputConfig.Effort)
-    //   low    -> haiku,  High
-    //   medium -> sonnet, Low
-    //   high   -> sonnet, High
+    // All tiers run on the default model (haiku); only the API thinking effort
+    // changes. The escalation model is reserved for the compactor.
+    //   low    -> haiku, Low
+    //   medium -> haiku, Medium
+    //   high   -> haiku, High
     private (string model, ApiEffort apiEffort) ResolveEffort(string effort) => effort?.ToLowerInvariant() switch
     {
-        "medium" => (_escalationModel, ApiEffort.Low),
-        "high" => (_escalationModel, ApiEffort.High),
-        _ => (_defaultModel, ApiEffort.High), // "low" or anything else
+        "medium" => (_defaultModel, ApiEffort.Medium),
+        "high" => (_defaultModel, ApiEffort.High),
+        _ => (_defaultModel, ApiEffort.Low), // "low" or anything else
     };
 
     private void RestoreState()
@@ -193,19 +198,27 @@ public sealed class ClaudeSession
     {
         if (_statePersistence == null) return;
 
-        var state = new SessionState
+        try
         {
-            DefaultModel = _defaultModel,
-            LastCompacted = _lastCompacted?.ToString("o"),
-            ApproximateTokens = _approximateTokens,
-            Messages = _messages
-                .Select(m => JsonSerializer.SerializeToElement(m))
-                .ToList(),
-        };
+            var state = new SessionState
+            {
+                DefaultModel = _defaultModel,
+                LastCompacted = _lastCompacted?.ToString("o"),
+                ApproximateTokens = _approximateTokens,
+                Messages = _messages
+                    .Select(m => JsonSerializer.SerializeToElement(m))
+                    .ToList(),
+            };
 
-        _statePersistence.Persist(state);
-        _statePersistedAt = DateTime.UtcNow;
-        _messagesSinceLastPersist = 0;
+            _statePersistence.Persist(state);
+            _statePersistedAt = DateTime.UtcNow;
+            _messagesSinceLastPersist = 0;
+            _sessionLogger.LogDebug("Persisted session state ({MessageCount} messages)", _messages.Count);
+        }
+        catch (Exception ex)
+        {
+            _sessionLogger.LogError(ex, "Failed to persist session state ({MessageCount} messages)", _messages.Count);
+        }
     }
 
     private static string GenerateRequestId()

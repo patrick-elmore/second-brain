@@ -86,6 +86,9 @@ public sealed class McpHostedService : IHostedService
             session: session,
             searchEngine: searchEngine,
             requestHistory: requestHistory,
+            sourcesConfigPath: sourcesConfig,
+            ftsDbPath: ftsDbPath,
+            indexMaxBytes: sb.IndexMaxBytes,
             logger: _logger,
             stats: statsTracker);
 
