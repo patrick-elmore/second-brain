@@ -22,6 +22,8 @@
     "state_persist_every_n_messages": 5,
     "state_backup_count": 5,
 
-    "index_max_bytes": 5000000
+    "index_max_bytes": 5000000,
+
+    "vertex_base_url": ""
   }
 }

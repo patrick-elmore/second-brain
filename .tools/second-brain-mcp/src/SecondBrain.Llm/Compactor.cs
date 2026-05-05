@@ -18,7 +18,7 @@ public sealed class Compactor
         _stats = stats;
     }
 
-    public async Task<string> CompactAsync(
+    public async Task<CompactorOutput> CompactAsync(
         IReadOnlyList<MessageParam> messages,
         string? customInstruction,
         CancellationToken ct)
@@ -43,15 +43,17 @@ public sealed class Compactor
             ],
         }, ct);
 
-        _stats?.RecordLlmCall(
+        var cost = _stats?.RecordLlmCall(
             _compactionModel,
             response.Usage.InputTokens,
             response.Usage.OutputTokens,
             response.Usage.CacheCreationInputTokens ?? 0,
-            response.Usage.CacheReadInputTokens ?? 0);
+            response.Usage.CacheReadInputTokens ?? 0) ?? 0m;
 
-        return ExtractText(response);
+        return new CompactorOutput(ExtractText(response), cost);
     }
+
+    public sealed record CompactorOutput(string Summary, decimal EstimatedCostUsd);
 
     private static string BuildInstruction(string? customInstruction)
     {

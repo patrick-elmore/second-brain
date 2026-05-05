@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SecondBrain.Index.Indexing;
 using SecondBrain.Llm;
 
 namespace SecondBrain.Mcp.Stats;
@@ -18,6 +19,12 @@ public sealed class StatsTracker : IStatsRecorder
     private readonly Lock _lock = new();
     private readonly ILogger<StatsTracker> _logger;
     private readonly DateTimeOffset _processStarted = DateTimeOffset.UtcNow;
+    private readonly IndexStatsProvider? _indexStatsProvider;
+
+    // Index refresh tracking (since process start; not persisted)
+    private long _totalRefreshes;
+    private DateTimeOffset? _lastRefreshAt;
+    private RefreshSummary? _lastRefresh;
 
     // Hourly buckets of MCP tool calls (last 24h).
     private readonly ConcurrentDictionary<DateTimeOffset, long> _hourlyToolCalls = new();
@@ -35,11 +42,16 @@ public sealed class StatsTracker : IStatsRecorder
 
     private DateTimeOffset _statsSince;
 
-    public StatsTracker(PricingTable pricing, string statsFilePath, ILogger<StatsTracker> logger)
+    public StatsTracker(
+        PricingTable pricing,
+        string statsFilePath,
+        ILogger<StatsTracker> logger,
+        IndexStatsProvider? indexStatsProvider = null)
     {
         _pricing = pricing;
         _statsFilePath = statsFilePath;
         _logger = logger;
+        _indexStatsProvider = indexStatsProvider;
         _statsSince = DateTimeOffset.UtcNow;
         _lastSeenHour = TruncateToHour(DateTimeOffset.UtcNow);
 
@@ -50,10 +62,27 @@ public sealed class StatsTracker : IStatsRecorder
         LoadFromDisk();
     }
 
+    public void RecordIndexRefresh(int added, int modified, int removed, int unchanged, int skipped, TimeSpan elapsed)
+    {
+        Interlocked.Increment(ref _totalRefreshes);
+        lock (_lock)
+        {
+            _lastRefreshAt = DateTimeOffset.UtcNow;
+            _lastRefresh = new RefreshSummary(
+                Added: added,
+                Modified: modified,
+                Removed: removed,
+                Unchanged: unchanged,
+                Skipped: skipped,
+                ElapsedSeconds: Math.Round(elapsed.TotalSeconds, 2));
+        }
+    }
+
     // ── IStatsRecorder ──────────────────────────────────────────────────────
 
-    public void RecordLlmCall(string model, long inputTokens, long outputTokens, long cacheCreationTokens, long cacheReadTokens)
+    public decimal RecordLlmCall(string model, long inputTokens, long outputTokens, long cacheCreationTokens, long cacheReadTokens)
     {
+        var cost = _pricing.CalculateCost(model, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
         var stats = _llmByModel.GetOrAdd(model, _ => new ModelStats());
         lock (stats)
         {
@@ -62,9 +91,10 @@ public sealed class StatsTracker : IStatsRecorder
             stats.OutputTokens += outputTokens;
             stats.CacheCreationTokens += cacheCreationTokens;
             stats.CacheReadTokens += cacheReadTokens;
-            stats.EstimatedCostUsd += _pricing.CalculateCost(model, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
+            stats.EstimatedCostUsd += cost;
         }
         MaybePersist();
+        return cost;
     }
 
     public void RecordToolDispatch(string toolName)
@@ -138,6 +168,8 @@ public sealed class StatsTracker : IStatsRecorder
         int distinctCount;
         lock (_distinctFilesRead) distinctCount = _distinctFilesRead.Count;
 
+        var index = BuildIndexSection();
+
         return new
         {
             uptime = (now - _processStarted).ToString(@"d\.hh\:mm\:ss"),
@@ -160,6 +192,7 @@ public sealed class StatsTracker : IStatsRecorder
                 total_reads = Interlocked.Read(ref _fileReads),
                 distinct_files = distinctCount,
             },
+            index,
             memory = new
             {
                 working_set_mb = Math.Round(process.WorkingSet64 / 1048576.0, 1),
@@ -167,6 +200,63 @@ public sealed class StatsTracker : IStatsRecorder
                 gen0_collections = GC.CollectionCount(0),
                 gen1_collections = GC.CollectionCount(1),
                 gen2_collections = GC.CollectionCount(2),
+            },
+        };
+    }
+
+    private object BuildIndexSection()
+    {
+        IndexStatsSnapshot? snap = null;
+        try
+        {
+            snap = _indexStatsProvider?.Snapshot();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "IndexStatsProvider.Snapshot failed");
+        }
+
+        RefreshSummary? lastRefresh;
+        DateTimeOffset? lastRefreshAt;
+        long totalRefreshes;
+        lock (_lock)
+        {
+            lastRefresh = _lastRefresh;
+            lastRefreshAt = _lastRefreshAt;
+            totalRefreshes = Interlocked.Read(ref _totalRefreshes);
+        }
+
+        if (snap == null)
+        {
+            return new
+            {
+                exists = false,
+                refresh = new
+                {
+                    total = totalRefreshes,
+                    last_at = lastRefreshAt,
+                    last = lastRefresh,
+                },
+            };
+        }
+
+        return new
+        {
+            exists = snap.Exists,
+            file_count = snap.FileCount,
+            total_indexed_bytes = snap.TotalIndexedBytes,
+            db_file_bytes = snap.DbFileSizeBytes,
+            db_file_mtime = snap.DbFileMTime,
+            last_indexed_at = snap.LastIndexedAt,
+            by_source_folder = snap.BySourceFolder
+                .Select(b => new { source_folder_id = b.Key, count = b.Count }),
+            by_source_type = snap.BySourceType
+                .Select(b => new { source_type = b.Key, count = b.Count }),
+            refresh = new
+            {
+                total = totalRefreshes,
+                last_at = lastRefreshAt,
+                last = lastRefresh,
             },
         };
     }
@@ -299,4 +389,12 @@ public sealed class StatsTracker : IStatsRecorder
         public long CacheReadTokens { get; set; }
         public decimal EstimatedCostUsd { get; set; }
     }
+
+    private sealed record RefreshSummary(
+        int Added,
+        int Modified,
+        int Removed,
+        int Unchanged,
+        int Skipped,
+        double ElapsedSeconds);
 }

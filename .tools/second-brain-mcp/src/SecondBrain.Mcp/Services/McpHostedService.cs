@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using SecondBrain.Files;
+using SecondBrain.Index.Indexing;
 using SecondBrain.Index.Search;
 using SecondBrain.Llm;
 using SecondBrain.Mcp.Configuration;
@@ -47,7 +48,12 @@ public sealed class McpHostedService : IHostedService
         var pricingPath = Resolve(Path.Combine("config", "pricing.json"));
         var statsPath = Resolve(Path.Combine("logs", "stats.json"));
         var pricing = PricingTable.Load(pricingPath);
-        var statsTracker = new StatsTracker(pricing, statsPath, _loggerFactory.CreateLogger<StatsTracker>());
+        var indexStatsProvider = new IndexStatsProvider(ftsDbPath);
+        var statsTracker = new StatsTracker(
+            pricing,
+            statsPath,
+            _loggerFactory.CreateLogger<StatsTracker>(),
+            indexStatsProvider);
         _state.StatsTracker = statsTracker;
 
         // Build files layer
@@ -79,6 +85,7 @@ public sealed class McpHostedService : IHostedService
             escalationModel: sb.EscalationModel,
             compactThresholdTokens: sb.CompactThresholdTokens,
             persistEveryNMessages: sb.StatePersistEveryNMessages,
+            vertexBaseUrl: sb.VertexBaseUrl,
             logger: _logger,
             stats: statsTracker);
 

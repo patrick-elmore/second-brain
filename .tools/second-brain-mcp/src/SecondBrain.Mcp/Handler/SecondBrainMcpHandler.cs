@@ -233,6 +233,7 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
             ["model_used"] = askResult.ModelUsed,
             ["tools_called"] = askResult.ToolsCalled,
             ["files_referenced"] = new JsonArray(askResult.FilesReferenced.Select(f => JsonValue.Create(f)).ToArray()),
+            ["estimated_cost_usd"] = Math.Round(askResult.EstimatedCostUsd, 6),
         };
 
         return ResponseBuilder.ToolResult(response.ToJsonString());
@@ -249,6 +250,7 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
             ["messages_after"] = result.MessagesAfter,
             ["approximate_tokens_before"] = result.ApproximateTokensBefore,
             ["approximate_tokens_after"] = result.ApproximateTokensAfter,
+            ["estimated_cost_usd"] = Math.Round(result.EstimatedCostUsd, 6),
         };
 
         return ResponseBuilder.ToolResult(response.ToJsonString());

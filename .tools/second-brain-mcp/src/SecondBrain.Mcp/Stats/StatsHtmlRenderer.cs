@@ -53,6 +53,7 @@ internal static class StatsHtmlRenderer
           .Append("</p>");
 
         RenderLlm(sb, node["llm"]);
+        RenderIndex(sb, node["index"]);
         RenderToolCalls(sb, node["tool_calls"]);
         RenderFiles(sb, node["files"]);
         RenderMemory(sb, node["memory"]);
@@ -145,6 +146,87 @@ internal static class StatsHtmlRenderer
         }
     }
 
+    private static void RenderIndex(StringBuilder sb, JsonNode? index)
+    {
+        if (index is not JsonObject obj) return;
+
+        sb.Append("<h2>Index</h2>");
+
+        var exists = obj["exists"]?.GetValue<bool>() ?? false;
+        if (!exists)
+        {
+            sb.Append("<p class=\"muted\">Index database does not exist yet.</p>");
+            RenderRefreshSubsection(sb, obj["refresh"]);
+            return;
+        }
+
+        sb.Append("<div class=\"pair\"><span class=\"k\">files indexed</span><span class=\"v\">")
+          .Append(FormatLong(obj["file_count"]))
+          .Append("</span> · <span class=\"k\">indexed bytes</span><span class=\"v\">")
+          .Append(FormatBytes(obj["total_indexed_bytes"]))
+          .Append("</span> · <span class=\"k\">db file</span><span class=\"v\">")
+          .Append(FormatBytes(obj["db_file_bytes"]))
+          .Append("</span></div>");
+
+        sb.Append("<div class=\"pair\"><span class=\"k\">last indexed row</span><span class=\"v\">")
+          .Append(Esc(FormatTimestamp(obj["last_indexed_at"])))
+          .Append("</span> · <span class=\"k\">db file mtime</span><span class=\"v\">")
+          .Append(Esc(FormatTimestamp(obj["db_file_mtime"])))
+          .Append("</span></div>");
+
+        if (obj["by_source_folder"] is JsonArray bySrc && bySrc.Count > 0)
+        {
+            sb.Append("<h3>By source folder</h3>");
+            sb.Append("<table><tr><th>source_folder_id</th><th class=\"num\">files</th></tr>");
+            foreach (var entry in bySrc)
+            {
+                if (entry is not JsonObject e) continue;
+                sb.Append("<tr><td class=\"mono\">").Append(Esc(e["source_folder_id"]?.GetValue<string>() ?? "")).Append("</td>")
+                  .Append("<td class=\"num\">").Append(FormatLong(e["count"])).Append("</td></tr>");
+            }
+            sb.Append("</table>");
+        }
+
+        if (obj["by_source_type"] is JsonArray byType && byType.Count > 0)
+        {
+            sb.Append("<h3>By source type</h3>");
+            sb.Append("<table><tr><th>source_type</th><th class=\"num\">files</th></tr>");
+            foreach (var entry in byType)
+            {
+                if (entry is not JsonObject e) continue;
+                sb.Append("<tr><td class=\"mono\">").Append(Esc(e["source_type"]?.GetValue<string>() ?? "")).Append("</td>")
+                  .Append("<td class=\"num\">").Append(FormatLong(e["count"])).Append("</td></tr>");
+            }
+            sb.Append("</table>");
+        }
+
+        RenderRefreshSubsection(sb, obj["refresh"]);
+    }
+
+    private static void RenderRefreshSubsection(StringBuilder sb, JsonNode? refresh)
+    {
+        if (refresh is not JsonObject obj) return;
+
+        sb.Append("<h3>Auto-refresh</h3>");
+        sb.Append("<div class=\"pair\"><span class=\"k\">refreshes since start</span><span class=\"v\">")
+          .Append(FormatLong(obj["total"]))
+          .Append("</span> · <span class=\"k\">last run</span><span class=\"v\">")
+          .Append(Esc(FormatTimestamp(obj["last_at"])))
+          .Append("</span></div>");
+
+        if (obj["last"] is JsonObject last)
+        {
+            sb.Append("<div class=\"pair\"><span class=\"k\">last run delta</span><span class=\"v\">")
+              .Append("added ").Append(FormatLong(last["added"]))
+              .Append(" · modified ").Append(FormatLong(last["modified"]))
+              .Append(" · removed ").Append(FormatLong(last["removed"]))
+              .Append(" · unchanged ").Append(FormatLong(last["unchanged"]))
+              .Append(" · skipped ").Append(FormatLong(last["skipped"]))
+              .Append(" (").Append(FormatDouble(last["elapsed_seconds"])).Append("s)")
+              .Append("</span></div>");
+        }
+    }
+
     private static void RenderFiles(StringBuilder sb, JsonNode? files)
     {
         if (files is not JsonObject obj) return;
@@ -201,6 +283,23 @@ internal static class StatsHtmlRenderer
             try { return "$" + n.GetValue<double>().ToString("N6", CultureInfo.InvariantCulture); }
             catch { return Esc(n.ToString()); }
         }
+    }
+
+    private static string FormatBytes(JsonNode? n)
+    {
+        if (n == null) return "0 B";
+        long bytes;
+        try { bytes = n.GetValue<long>(); }
+        catch { return Esc(n.ToString()); }
+
+        const double KB = 1024d, MB = KB * 1024, GB = MB * 1024;
+        return bytes switch
+        {
+            >= (long)GB => $"{bytes / GB:N2} GB",
+            >= (long)MB => $"{bytes / MB:N1} MB",
+            >= (long)KB => $"{bytes / KB:N1} KB",
+            _ => $"{bytes:N0} B",
+        };
     }
 
     private static string FormatTimestamp(JsonNode? n)

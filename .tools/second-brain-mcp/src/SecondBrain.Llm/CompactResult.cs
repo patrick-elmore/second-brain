@@ -4,4 +4,5 @@ public sealed record CompactResult(
     int MessagesBefore,
     int MessagesAfter,
     long ApproximateTokensBefore,
-    long ApproximateTokensAfter);
+    long ApproximateTokensAfter,
+    decimal EstimatedCostUsd);

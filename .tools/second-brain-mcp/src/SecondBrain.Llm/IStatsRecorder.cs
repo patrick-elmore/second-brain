@@ -6,7 +6,13 @@ namespace SecondBrain.Llm;
 /// </summary>
 public interface IStatsRecorder
 {
-    void RecordLlmCall(
+    /// <summary>
+    /// Records token usage for a single LLM API call and returns the estimated
+    /// USD cost the recorder computed from its pricing table. Callers can sum
+    /// the returned values to attribute total cost to a higher-level operation
+    /// (e.g. a single <c>ask</c> may make multiple API calls).
+    /// </summary>
+    decimal RecordLlmCall(
         string model,
         long inputTokens,
         long outputTokens,

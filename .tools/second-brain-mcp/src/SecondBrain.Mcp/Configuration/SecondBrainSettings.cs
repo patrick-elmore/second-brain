@@ -77,6 +77,18 @@ public sealed class SecondBrainSettings
     [JsonPropertyName("index_max_bytes")]
     public int IndexMaxBytes { get; set; } = 5_000_000;
 
+    [JsonPropertyName("index_refresh_interval_seconds")]
+    public int IndexRefreshIntervalSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Optional override for the Vertex base URL. Used to route requests through a
+    /// local proxy. The Vertex SDK derives BaseUrl from region in its constructor,
+    /// so this is applied via the client's init-only BaseUrl property after
+    /// construction. Empty/null = use the SDK-derived Google URL.
+    /// </summary>
+    [JsonPropertyName("vertex_base_url")]
+    public string VertexBaseUrl { get; set; } = "";
+
     public string ResolveApiKey() =>
         Environment.GetEnvironmentVariable(AnthropicApiKeyEnv) ?? string.Empty;
 }

@@ -1,13 +1,10 @@
 ---
 name: beta-brain
-description: Beta/testing copy of the brain skill. Identical interface to /brain but used to validate changes before promoting to the global ~/.claude/skills/brain/SKILL.md. Query your second brain MCP. Subcommands cover search, ask, session management, and request retrieval.
+description: Query your second brain MCP. Subcommands cover search, ask, session management, request retrieval, and index rebuilding. Agents should use this skill whenever they need to retrieve information from the user's personal knowledge corpus (meeting transcripts, daily notes, planning artifacts, performance review documents) rather than searching the web or guessing.
 argument-hint: "[ask|search|compact|reset|info|get|rebuild] [--effort low|medium|high] [--filter date:YYYY-MM-DD..YYYY-MM-DD] [--filter people:name] [--filter type:transcript] [--filter folder:id] [--top N] [--paths] [--list-sources] [--fields f1,f2] <text>"
 ---
 
-# /beta-brain skill
-
-Pre-promotion staging copy of `/brain`. Identical behavior — edit this version, validate it,
-then copy to `~/.claude/skills/brain/SKILL.md` to promote globally.
+# /brain skill
 
 Thin wrapper around the seven tools on the `second-brain` MCP. Pick a subcommand;
 the rest of the input is the query/argument. Defaults to `ask` when no subcommand
@@ -79,14 +76,14 @@ record later with `/brain get <id>`.
 **`ask`:**
 1. Display the `synthesis` field as-is.
 2. Append a `### Sources` section listing each `files_referenced` entry as a bullet (if non-empty).
-3. Append a footer: `_request_id: {request_id} · model: {model_used} · tools_called: {tools_called}_`
+3. Append a footer: `_request_id: {request_id} · model: {model_used} · tools_called: {tools_called} · cost: ${estimated_cost_usd}_`. Format the cost with 6 decimal places. Omit the ` · cost: ...` segment if the field is missing or zero.
 
 **`search`:**
 1. For each hit, render: `- **{relative_path}** _(score: {score:.2f})_` then if a snippet exists, render the snippet on the next line indented as a blockquote.
 2. If `sources_summary` is present, append a `### Source folders` section listing each as `- {source_folder_id}: {hit_count}`.
 3. Footer: `_request_id: {request_id} · {hits.length} hits_`.
 
-**`compact`:** Render the four counts: `Messages: {before} → {after}, Tokens: {before} → {after}`.
+**`compact`:** Render the four counts: `Messages: {before} → {after}, Tokens: {before} → {after}`. Append `_cost: ${estimated_cost_usd}_` on a new line if the field is present and non-zero (6 decimal places).
 
 **`reset`:** Render `Session reset.`
 

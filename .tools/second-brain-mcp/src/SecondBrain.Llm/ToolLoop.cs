@@ -17,6 +17,7 @@ internal sealed class ToolLoopResult
     public required IReadOnlyList<string> FilesReferenced { get; init; }
     public required long InputTokensUsed { get; init; }
     public required long OutputTokensUsed { get; init; }
+    public required decimal EstimatedCostUsd { get; init; }
 }
 
 internal sealed class ToolLoop
@@ -51,6 +52,7 @@ internal sealed class ToolLoop
         var toolsCalled = 0;
         long inputTokens = 0;
         long outputTokens = 0;
+        decimal estimatedCost = 0m;
         string synthesis = string.Empty;
 
         while (true)
@@ -76,20 +78,6 @@ internal sealed class ToolLoop
             if (_supportsOutputConfig)
                 createParams = createParams with { OutputConfig = new OutputConfig { Effort = apiEffort } };
 
-            // DIAGNOSTIC: dump the actual API body (RawBodyData) so we can verify cache_control is being sent
-            try
-            {
-                var bodyJson = JsonSerializer.Serialize(createParams.RawBodyData);
-                _logger.LogInformation("API body length={Len} cache_control_count={CacheCount} body={Body}",
-                    bodyJson.Length,
-                    System.Text.RegularExpressions.Regex.Matches(bodyJson, "cache_control").Count,
-                    bodyJson.Length > 20000 ? bodyJson[..20000] + "...(truncated)" : bodyJson);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to serialize request for diagnostic logging");
-            }
-
             var response = await _client.Messages.Create(createParams, ct);
 
             inputTokens += response.Usage.InputTokens;
@@ -103,12 +91,12 @@ internal sealed class ToolLoop
                 response.Usage.CacheReadInputTokens?.ToString() ?? "null",
                 response.Usage.CacheCreationInputTokens?.ToString() ?? "null");
 
-            _stats?.RecordLlmCall(
+            estimatedCost += _stats?.RecordLlmCall(
                 model,
                 response.Usage.InputTokens,
                 response.Usage.OutputTokens,
                 response.Usage.CacheCreationInputTokens ?? 0,
-                response.Usage.CacheReadInputTokens ?? 0);
+                response.Usage.CacheReadInputTokens ?? 0) ?? 0m;
 
             // Append assistant response to messages (as ContentBlockParam via Json)
             messages.Add(new MessageParam
@@ -162,6 +150,7 @@ internal sealed class ToolLoop
             FilesReferenced = [.. filesThisTurn],
             InputTokensUsed = inputTokens,
             OutputTokensUsed = outputTokens,
+            EstimatedCostUsd = estimatedCost,
         };
     }
 

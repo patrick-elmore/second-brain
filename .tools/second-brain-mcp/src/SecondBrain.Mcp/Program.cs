@@ -61,6 +61,7 @@ try
 
     builder.Services.AddSingleton<McpServiceState>();
     builder.Services.AddHostedService<McpHostedService>();
+    builder.Services.AddHostedService<IndexRefreshService>();
 
     builder.WebHost.ConfigureKestrel(options =>
     {

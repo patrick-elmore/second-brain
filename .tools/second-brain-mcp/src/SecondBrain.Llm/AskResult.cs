@@ -5,4 +5,5 @@ public sealed record AskResult(
     string Synthesis,
     string ModelUsed,
     int ToolsCalled,
-    IReadOnlyList<string> FilesReferenced);
+    IReadOnlyList<string> FilesReferenced,
+    decimal EstimatedCostUsd);

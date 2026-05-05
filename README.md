@@ -35,6 +35,11 @@ If you are an agent reading this README to learn the interface, jump to [MCP too
                                    │  │   • internal tools:          │  │
                                    │  │       search, read_file      │  │
                                    │  └──────────────┬───────────────┘  │
+                                   │  ┌──────────────────────────────┐  │
+                                   │  │ IndexRefreshService          │  │
+                                   │  │  • background loop           │  │
+                                   │  │  • incremental every N sec   │  │
+                                   │  └──────────────────────────────┘  │
                                    │                 │                  │
                                    │       ┌─────────┼─────────┐        │
                                    │       ▼         ▼         ▼        │
@@ -310,7 +315,7 @@ Walks `root` to `max_depth` directories deep, indexes every directory whose name
 |---|---|---|
 | `repos-context` | discover `.context` | `C:\repos` |
 | `misc-context` | discover `.context` | `C:\misc` |
-| `personal-notes` | static | `C:\data\your-data\obsidian\notes` |
+| `your-data` | static (excludes `.obsidian`, `claude-docs`) | `C:\data\your-data` |
 
 ---
 
@@ -392,7 +397,7 @@ Beyond the MCP JSON-RPC endpoint, the service exposes three GETs for diagnostics
 | POST | `/mcp` | JSON-RPC 2.0 entry point. Accepts `initialize`, `tools/list`, `tools/call`. |
 | GET | `/health` | `{"status": "healthy", "service": "SecondBrainHttpMcp", "version": "1.0.0"}`. Returns 503 if the handler isn't ready. |
 | GET | `/.well-known/mcp` | Discovery: protocol version, transport, endpoint URL. |
-| GET | `/stats` | HTML dashboard summarizing tool call counts (last 24h, by name), per-model LLM usage (requests, tokens, cache hits, estimated USD cost via `pricing.json`), file read counts, and process memory. |
+| GET | `/stats` | HTML dashboard summarizing per-model LLM usage (requests, tokens, cache hits, estimated USD cost via `pricing.json`), tool call counts (last 24h, by name), file read counts, **index state** (file count, total indexed bytes, db file size, last indexed-row timestamp, breakdown by source folder and source type), **auto-refresh activity** (refreshes since start, last run, last delta), and process memory. |
 | GET | `/stats.json` | Same data as `/stats`, raw JSON for programmatic consumers. |
 
 `/stats` is useful for monitoring cost. The dashboard surfaces total estimated USD and a per-model breakdown with `cache_creation_tokens` and `cache_read_tokens` so you can verify caching is firing. Use `/stats.json` for the same data as raw JSON.
@@ -416,6 +421,8 @@ Key fields:
 - `second_brain.fts_db_path`, `requests_db_path`, `session_state_path` — relative to install dir.
 - `second_brain.sources_config` — points at `config/sources.json` in the install dir.
 - `second_brain.index_max_bytes` — file-size cap for indexing (`5000000`).
+- `second_brain.index_refresh_interval_seconds` — interval for the background incremental-refresh loop (`300` = every 5 minutes). Set to `0` to disable. The loop runs once on startup to catch drift, then on the configured cadence.
+- `second_brain.vertex_base_url` — optional override for the Vertex endpoint. When non-empty, the service routes Vertex requests to this URL (e.g. `http://localhost:9996` for a local proxy) instead of the SDK's region-derived Google URL. Leave as `""` to use the default.
 
 ### `config/pricing.json` (versioned in repo)
 
@@ -474,7 +481,9 @@ Stops and removes the service, prompts before deleting the install directory.
 
 ### Rebuilding the index
 
-The MCP exposes the `rebuild_index` tool — see [`rebuild_index`](#rebuild_index--refresh-ftsdb). Two ways to invoke:
+A background loop inside the service (`IndexRefreshService`) runs an incremental update on startup and then every `index_refresh_interval_seconds` (default 300 = 5 minutes). For most use, you do not need to think about rebuilds — the index trails the filesystem by at most that interval. Set the interval to `0` in `mcp_config.json` to disable the loop.
+
+For an immediate refresh, the MCP exposes the `rebuild_index` tool — see [`rebuild_index`](#rebuild_index--refresh-ftsdb). Two ways to invoke:
 
 ```
 /brain rebuild                  # via the skill (incremental by default)

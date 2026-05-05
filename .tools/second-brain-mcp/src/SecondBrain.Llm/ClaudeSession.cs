@@ -63,13 +63,15 @@ public sealed class ClaudeSession
         string effort,
         CancellationToken ct)
     {
-        // Compact before answering if instruction provided
-        if (!string.IsNullOrWhiteSpace(compactInstruction))
-            await CompactAsync(compactInstruction, ct);
+        // Track any compaction cost incurred inside this ask so the per-ask
+        // cost reflects the full LLM spend (tool loop + auto/explicit compact).
+        var compactionCost = 0m;
 
-        // Auto-compact if over threshold
+        if (!string.IsNullOrWhiteSpace(compactInstruction))
+            compactionCost += (await CompactAsync(compactInstruction, ct)).EstimatedCostUsd;
+
         if (_approximateTokens >= _compactThresholdTokens && _messages.Count > 0)
-            await CompactAsync(null, ct);
+            compactionCost += (await CompactAsync(null, ct)).EstimatedCostUsd;
 
         var requestId = GenerateRequestId();
         var (model, apiEffort) = ResolveEffort(effort);
@@ -96,7 +98,8 @@ public sealed class ClaudeSession
             Synthesis: loopResult.Synthesis,
             ModelUsed: model,
             ToolsCalled: loopResult.ToolsCalled,
-            FilesReferenced: loopResult.FilesReferenced);
+            FilesReferenced: loopResult.FilesReferenced,
+            EstimatedCostUsd: loopResult.EstimatedCostUsd + compactionCost);
     }
 
     public async Task<CompactResult> CompactAsync(string? instruction, CancellationToken ct)
@@ -105,19 +108,19 @@ public sealed class ClaudeSession
         var tokensBefore = _approximateTokens;
 
         if (_messages.Count == 0)
-            return new CompactResult(0, 0, tokensBefore, 0);
+            return new CompactResult(0, 0, tokensBefore, 0, 0m);
 
-        var summary = await _compactor.CompactAsync(_messages, instruction, ct);
+        var compaction = await _compactor.CompactAsync(_messages, instruction, ct);
 
         _messages.Clear();
         _messages.Add(new MessageParam
         {
             Role = Role.User,
-            Content = $"[Context summary from prior conversation]\n\n{summary}",
+            Content = $"[Context summary from prior conversation]\n\n{compaction.Summary}",
         });
 
         // After compaction, token count approximation resets to something small
-        _approximateTokens = summary.Length / 4; // rough token estimate
+        _approximateTokens = compaction.Summary.Length / 4; // rough token estimate
         _lastCompacted = DateTime.UtcNow;
 
         PersistState();
@@ -126,7 +129,8 @@ public sealed class ClaudeSession
             MessagesBefore: messagesBefore,
             MessagesAfter: _messages.Count,
             ApproximateTokensBefore: tokensBefore,
-            ApproximateTokensAfter: _approximateTokens);
+            ApproximateTokensAfter: _approximateTokens,
+            EstimatedCostUsd: compaction.EstimatedCostUsd);
     }
 
     public void Reset()
