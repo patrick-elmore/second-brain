@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir   = $PSScriptRoot
 $McpProj     = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.Mcp") "SecondBrain.Mcp.csproj"
 $BuilderProj = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.IndexBuilder") "SecondBrain.IndexBuilder.csproj"
+$MinerProj   = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.AliasMiner") "SecondBrain.AliasMiner.csproj"
 $InstallDir  = Join-Path $env:LOCALAPPDATA "SecondBrainMcpServer"
 $ConfigFile  = Join-Path $InstallDir "mcp_config.json"
 
@@ -30,6 +31,10 @@ if ($LASTEXITCODE -ne 0) { Write-Error "MCP server build failed."; exit 1 }
 Write-Host "Building IndexBuilder..."
 dotnet publish $BuilderProj --configuration Release --runtime win-x64 --self-contained false --output $InstallDir
 if ($LASTEXITCODE -ne 0) { Write-Error "IndexBuilder build failed."; exit 1 }
+
+Write-Host "Building AliasMiner..."
+dotnet publish $MinerProj --configuration Release --runtime win-x64 --self-contained false --output $InstallDir
+if ($LASTEXITCODE -ne 0) { Write-Error "AliasMiner build failed."; exit 1 }
 
 # Refresh pricing.json from repo (reference data, always overwrite)
 $RepoPricingJson = Join-Path $ScriptDir "config" "pricing.json"
