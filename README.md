@@ -283,7 +283,7 @@ mcp__second-brain__generate_summaries({ "source_type": "1on1" })
 - **Auto-compact at 150K tokens.** When `approximate_tokens` ≥ 150,000 at the start of an `ask`, compaction runs first. The full message log becomes a single summary message before the new question is appended.
 - **Disk persistence is unconditional.** State is written to `index/session-state.json` after every `ask` and after every `compact`/`reset`. Restarting the service preserves the conversation.
 - **Prompt caching is on.** Three `cache_control: ephemeral` breakpoints are placed per request: on the system prompt, on the last tool definition, and on the last message. Cache hits drop input cost by ~10× on Sonnet/Opus and ~10× on Haiku, but only fire above the per-model minimum prefix size (4096 tokens for Haiku 4.5, 1024 for Sonnet/Opus). Short conversations don't cache.
-- **Internal tools are not the MCP tools.** Inside `ask`, the model uses its own `search` and `read_file` tools defined in `ToolDefinitions.cs`. These hit the same SearchEngine and FileReader as the MCP-level `search`, but they are invoked by the model, not the caller. Callers only see `tools_called` (a count) and `files_referenced` (paths) in the response.
+- **Internal tools are not the MCP tools.** Inside `ask`, the model uses its own `search` and `read_file` tools defined in `ToolDefinitions.cs`. These are invoked by the model, not the caller; callers only see `tools_called` (a count) and `files_referenced` (paths) in the response. The internal `search` differs from the external MCP `search` in two ways: (1) it takes a `queries` array (1–8 variants) rather than a single `query` string, and fuses per-variant rankings via Reciprocal Rank Fusion — documents scoring well across multiple variants surface above single-variant noise; (2) scores are positive RRF values (higher = more relevant) rather than negative BM25 values. The external MCP `search` tool is unchanged: single `query` string, negative BM25 scores. The internal session also maintains an entity expansion table (loaded from `Prompts/aliases.md`) that tells the model to OR alias groups together for known entities — `Atlas` → `(Atlas OR "AWS Atlas" OR Atless)` — before issuing any search.
 
 Practical guidance for agents:
 
@@ -492,7 +492,7 @@ From an admin PowerShell at `.tools/second-brain-mcp/`:
 .\install.ps1
 ```
 
-Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes both `SecondBrain.Mcp` and `SecondBrain.IndexBuilder` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), copies `pricing.json` and `sources.json`, registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
+Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), copies `pricing.json` and `sources.json`, registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
 
 After install, you must:
 1. Set `ANTHROPIC_API_KEY` (or the Vertex env vars) at machine scope.
@@ -552,6 +552,34 @@ net start SecondBrainHttpMcp
 
 The persistent session reloads from `session-state.json` on start.
 
+### Alias mining
+
+The session's entity expansion table lives at `src/SecondBrain.Llm/Prompts/aliases.md` and is compiled into the service binary as an embedded resource. It maps surface forms to canonical entities so the model can expand `Anthony` → `(Anthony OR jane.public)` before issuing any search.
+
+`SecondBrain.AliasMiner.exe` is a one-shot maintenance tool that mines candidate aliases from the live corpus and writes a reviewed `candidates.md` for promotion into `aliases.md`.
+
+```powershell
+# From the install dir (after update.ps1):
+& "$env:LOCALAPPDATA\SecondBrainMcpServer\SecondBrain.AliasMiner.exe" `
+    --output "$env:USERPROFILE\alias-mining"
+
+# Or from the repo during development:
+dotnet run --project .tools/second-brain-mcp/src/SecondBrain.AliasMiner -- `
+    --config "$env:LOCALAPPDATA\SecondBrainMcpServer\mcp_config.json" `
+    --output ./alias-mining `
+    --workers 5 --effort medium
+```
+
+Key flags: `--dry-run` (signals only, no LLM calls), `--clear-output` (wipe output dir first), `--batch-size` (docs per Haiku call, default 15), `--workers` (parallel workers, default 5).
+
+The miner opens `fts.db` read-only and writes only to its own output directory — the running service is unaffected. After review, promote the output:
+
+```powershell
+cp alias-mining\candidates.md .tools\second-brain-mcp\src\SecondBrain.Llm\Prompts\aliases.md
+# Then rebuild and redeploy:
+.\update.ps1
+```
+
 ---
 
 ## The skill
@@ -589,9 +617,10 @@ config/
     pricing.json                       per-model USD pricing for cost tracking
   src/
     SecondBrain.Files/                 source folder enumeration, file reading, frontmatter parsing
-    SecondBrain.Index/                 FTS5 schema, search engine, request history
+    SecondBrain.Index/                 FTS5 schema, search engine, RRF fuser, request history
     SecondBrain.IndexBuilder/          console app: rebuild fts.db
-    SecondBrain.Llm/                   ClaudeSession, ToolLoop, Compactor, system prompts
+    SecondBrain.AliasMiner/            console app: mine candidate aliases from the corpus
+    SecondBrain.Llm/                   ClaudeSession, ToolLoop, Compactor, system prompts, aliases.md
     SecondBrain.Mcp/                   ASP.NET Core host, MCP handler, /mcp + /health + /stats endpoints
     SecondBrain.{Files,Index,Llm}.Tests/  xUnit test projects
 
@@ -599,6 +628,7 @@ config/
 %LOCALAPPDATA%\SecondBrainMcpServer\
   SecondBrain.Mcp.exe                  the service binary
   SecondBrain.IndexBuilder.exe         the indexer binary
+  SecondBrain.AliasMiner.exe           the alias-mining tool (one-shot, run manually)
   mcp_config.json                      live service config
   config/
     sources.json                       live source folder definitions
