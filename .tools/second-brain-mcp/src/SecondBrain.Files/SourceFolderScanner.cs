@@ -27,6 +27,8 @@ public sealed class SourceFolderScanner
             if (info.Length > maxBytes)
                 continue;
 
+            TryUnblock(filePath);
+
             var relative = Path.GetRelativePath(folder.AbsolutePath, filePath);
             var mtime = info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds;
 
@@ -37,6 +39,15 @@ public sealed class SourceFolderScanner
                 SizeBytes: info.Length,
                 MTime: mtime);
         }
+    }
+
+    // Removes the Zone.Identifier alternate data stream that Windows stamps on files
+    // transferred from another machine. LocalSystem cannot read MOTW-flagged files
+    // even with full ACL access, so the scanner would silently skip them otherwise.
+    private static void TryUnblock(string path)
+    {
+        try { File.Delete($"{path}:Zone.Identifier"); }
+        catch { }
     }
 
     private static IEnumerable<string> EnumerateFiles(string root, IReadOnlySet<string> excludeSubfolders)
