@@ -4,6 +4,7 @@
     <Project Path="src/SecondBrain.Files/SecondBrain.Files.csproj" />
     <Project Path="src/SecondBrain.Index.Tests/SecondBrain.Index.Tests.csproj" />
     <Project Path="src/SecondBrain.Index/SecondBrain.Index.csproj" />
+    <Project Path="src/SecondBrain.AliasMiner/SecondBrain.AliasMiner.csproj" />
     <Project Path="src/SecondBrain.IndexBuilder/SecondBrain.IndexBuilder.csproj" />
     <Project Path="src/SecondBrain.Llm.Tests/SecondBrain.Llm.Tests.csproj" />
     <Project Path="src/SecondBrain.Llm/SecondBrain.Llm.csproj" />

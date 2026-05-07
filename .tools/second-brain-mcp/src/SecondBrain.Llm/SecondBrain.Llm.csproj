@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Prompts\system_prompt.md" />
+    <EmbeddedResource Include="Prompts\aliases.md" />
   </ItemGroup>
 
   <ItemGroup>
