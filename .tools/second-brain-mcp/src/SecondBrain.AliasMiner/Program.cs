@@ -542,9 +542,48 @@ class MergedEntity(string canonical, string category)
 class RawCandidateEntity
 {
     [JsonPropertyName("canonical")] public string? Canonical { get; set; }
-    [JsonPropertyName("aliases")] public string[]? Aliases { get; set; }
+    [JsonPropertyName("aliases")]
+    [JsonConverter(typeof(FlexibleStringArrayConverter))]
+    public string[]? Aliases { get; set; }
     [JsonPropertyName("category")] public string? Category { get; set; }
     [JsonPropertyName("doc_ids")] public long[]? DocIds { get; set; }
+}
+
+// Haiku occasionally emits numbers (years, version numbers) in the aliases array.
+// This converter coerces any scalar token to its string representation.
+class FlexibleStringArrayConverter : JsonConverter<string[]?>
+{
+    public override string[]? Read(ref Utf8JsonReader reader, System.Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return null;
+        if (reader.TokenType != JsonTokenType.StartArray) return [];
+
+        var result = new List<string>();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            var s = reader.TokenType switch
+            {
+                JsonTokenType.String => reader.GetString() ?? "",
+                JsonTokenType.Number => reader.TryGetInt64(out var n)
+                    ? n.ToString()
+                    : reader.GetDouble().ToString(),
+                JsonTokenType.True => "true",
+                JsonTokenType.False => "false",
+                _ => "",
+            };
+            if (!string.IsNullOrWhiteSpace(s))
+                result.Add(s);
+        }
+        return result.ToArray();
+    }
+
+    public override void Write(Utf8JsonWriter writer, string[]? value, JsonSerializerOptions options)
+    {
+        if (value is null) { writer.WriteNullValue(); return; }
+        writer.WriteStartArray();
+        foreach (var s in value) writer.WriteStringValue(s);
+        writer.WriteEndArray();
+    }
 }
 
 static class MinerPrompts
