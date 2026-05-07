@@ -466,7 +466,12 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
     private async Task RunSummarizationAsync(string? sourceTypeFilter)
     {
         const int pageSize = 1000;
-        int processed = 0, skipped = 0;
+        // Sentinel written for permanently-skipped rows so they don't reload on the next
+        // page. Empty string is non-NULL (so the WHERE summary IS NULL filter excludes
+        // them) and contributes zero weight to the FTS index.
+        const string SkipSentinel = "";
+
+        int processed = 0, skippedPermanent = 0, failedTransient = 0;
         var sw = Stopwatch.StartNew();
 
         try
@@ -476,6 +481,8 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
                 var rows = LoadUnsummarizedRows(pageSize, sourceTypeFilter);
                 if (rows.Count == 0) break;
 
+                int pageRetired = 0;
+
                 await Parallel.ForEachAsync(rows, new ParallelOptions { MaxDegreeOfParallelism = 5 }, async (row, _) =>
                 {
                     try
@@ -484,29 +491,66 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
                         var results = await _summarizer.SummarizeBatchAsync([entry], CancellationToken.None);
                         var result = results.FirstOrDefault(r => r.Id == row.Id);
 
-                        if (result != default)
+                        if (result is null)
                         {
-                            WriteSummary(row.Id, row.RelativePath, result.Summary);
-                            Interlocked.Increment(ref processed);
+                            // Defensive: summarizer contract returns one result per input. If
+                            // we ever lose a result, treat as transient and let it retry.
+                            _logger.LogWarning("Summarizer returned no result for id={Id}", row.Id);
+                            Interlocked.Increment(ref failedTransient);
+                            return;
                         }
-                        else
+
+                        switch (result.Outcome)
                         {
-                            Interlocked.Increment(ref skipped);
+                            case SummarizationOutcome.Summarized:
+                                WriteSummary(row.Id, row.RelativePath, result.Summary!);
+                                Interlocked.Increment(ref processed);
+                                Interlocked.Increment(ref pageRetired);
+                                break;
+
+                            case SummarizationOutcome.Skipped:
+                                // Permanent — write sentinel so the row exits the unsummarized list.
+                                WriteSummary(row.Id, row.RelativePath, SkipSentinel);
+                                Interlocked.Increment(ref skippedPermanent);
+                                Interlocked.Increment(ref pageRetired);
+                                _logger.LogDebug("Permanently skipped id={Id} reason={Reason} path={Path}",
+                                    row.Id, result.Reason, row.RelativePath);
+                                break;
+
+                            case SummarizationOutcome.Failed:
+                                // Transient — leave NULL for a later retry.
+                                Interlocked.Increment(ref failedTransient);
+                                break;
                         }
                     }
                     catch (Exception ex)
                     {
+                        // Unexpected error in the per-row pipeline (DB write, etc.). Treat
+                        // as transient; do not retire the row.
                         _logger.LogWarning(ex, "Failed to summarize id={Id}", row.Id);
-                        Interlocked.Increment(ref skipped);
+                        Interlocked.Increment(ref failedTransient);
                     }
                 });
+
+                if (pageRetired == 0)
+                {
+                    // No row in this page made progress. Continuing would re-load the same
+                    // rows and re-fail forever. Bail out; the next refresh trigger will retry.
+                    _logger.LogWarning(
+                        "Summarization halting: page of {Count} rows produced zero progress (transient failures only). Will retry on next trigger.",
+                        rows.Count);
+                    break;
+                }
             }
 
-            _logger.LogInformation("Summarization complete: processed={Processed} skipped={Skipped} elapsed={Elapsed}", processed, skipped, sw.Elapsed);
+            _logger.LogInformation(
+                "Summarization complete: processed={Processed} skipped={Skipped} failed={Failed} elapsed={Elapsed}",
+                processed, skippedPermanent, failedTransient, sw.Elapsed);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Summarization failed after processed={Processed}", processed);
+            _logger.LogError(ex, "Summarization failed after processed={Processed} skipped={Skipped} failed={Failed}",
+                processed, skippedPermanent, failedTransient);
         }
         finally
         {

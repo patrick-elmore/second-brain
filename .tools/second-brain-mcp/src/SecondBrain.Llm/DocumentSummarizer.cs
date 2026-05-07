@@ -41,14 +41,19 @@ public sealed class DocumentSummarizer
 
     /// <summary>
     /// Summarizes a batch of documents in a single API call.
-    /// Returns one entry per successfully summarized document (skipped docs are omitted).
-    /// The returned summary includes the programmatic metadata prefix.
+    /// Returns one <see cref="SummarizationResult"/> per input doc with an explicit outcome:
+    /// <see cref="SummarizationOutcome.Summarized"/>, <see cref="SummarizationOutcome.Skipped"/>
+    /// (permanent — content too short, unreadable, or no parseable summary), or
+    /// <see cref="SummarizationOutcome.Failed"/> (transient — whole API call threw).
+    /// The caller is responsible for retiring Skipped rows so they aren't re-attempted forever.
     /// </summary>
-    public async Task<IReadOnlyList<(long Id, string Summary)>> SummarizeBatchAsync(
+    public async Task<IReadOnlyList<SummarizationResult>> SummarizeBatchAsync(
         IReadOnlyList<BatchDocEntry> docs,
         CancellationToken ct)
     {
-        // Read and filter documents — skip those with insufficient content
+        // Read and filter documents — record an outcome for each input so callers can
+        // distinguish permanent skips from transient API failures.
+        var results = new List<SummarizationResult>(docs.Count);
         var prepared = new List<PreparedDoc>();
         foreach (var doc in docs)
         {
@@ -57,12 +62,14 @@ public sealed class DocumentSummarizer
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Could not read {Path}", doc.AbsolutePath);
+                results.Add(SummarizationResult.Skip(doc.Id, $"unreadable: {ex.GetType().Name}"));
                 continue;
             }
 
             if (content.TrimEnd().Length < 100)
             {
                 _logger.LogDebug("Skipping {Path}: content too short", doc.AbsolutePath);
+                results.Add(SummarizationResult.Skip(doc.Id, "content too short"));
                 continue;
             }
 
@@ -72,7 +79,7 @@ public sealed class DocumentSummarizer
         }
 
         if (prepared.Count == 0)
-            return [];
+            return results;
 
         // Build user message — one block per doc
         var userMsg = BuildUserMessage(prepared);
@@ -115,11 +122,14 @@ public sealed class DocumentSummarizer
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Batch API call failed for {Count} docs", prepared.Count);
-            return [];
+            var reason = $"API error: {ex.GetType().Name}";
+            foreach (var doc in prepared)
+                results.Add(SummarizationResult.Fail(doc.Entry.Id, reason));
+            return results;
         }
 
         // Parse response — extract SUMMARY blocks by sequential ID
-        var results = new List<(long Id, string Summary)>();
+        var summarizedSeqs = new HashSet<int>();
         foreach (Match m in SummaryPattern.Matches(responseText))
         {
             if (!int.TryParse(m.Groups[1].Value, out var seq)) continue;
@@ -133,10 +143,20 @@ public sealed class DocumentSummarizer
             var prefix = BuildPrefix(doc.Entry.SourceType, doc.Entry.MetadataJson, doc.Entry.RelativePath);
             var fullSummary = string.IsNullOrEmpty(prefix) ? llmSummary : prefix + "\n" + llmSummary;
 
-            results.Add((doc.Entry.Id, fullSummary));
+            results.Add(SummarizationResult.Ok(doc.Entry.Id, fullSummary));
+            summarizedSeqs.Add(seq);
         }
 
-        _logger.LogDebug("Batch: {Prepared} docs sent, {Parsed} summaries parsed", prepared.Count, results.Count);
+        // Any prepared doc the model didn't summarize is a permanent skip — retrying would
+        // get the same result and burn tokens forever.
+        foreach (var doc in prepared)
+        {
+            if (!summarizedSeqs.Contains(doc.SequenceId))
+                results.Add(SummarizationResult.Skip(doc.Entry.Id, "no summary parsed from response"));
+        }
+
+        var parsed = summarizedSeqs.Count;
+        _logger.LogDebug("Batch: {Prepared} docs sent, {Parsed} summaries parsed", prepared.Count, parsed);
         return results;
     }
 
