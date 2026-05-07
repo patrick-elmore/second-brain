@@ -183,8 +183,12 @@ internal sealed class ToolLoop
     private string RunSearch(ToolUseBlock toolUse, HashSet<string> filesThisTurn)
     {
         var input = toolUse.Input;
-        var p = BuildSearchParams(input);
-        var result = _searchEngine.Search(p);
+        var queries = ExtractQueries(input);
+        var baseParams = BuildSearchParams(input);
+
+        var result = queries.Count > 0
+            ? _searchEngine.SearchMulti(queries, baseParams)
+            : _searchEngine.Search(baseParams); // filter-only fallthrough
 
         foreach (var hit in result.Hits)
             filesThisTurn.Add(hit.AbsolutePath);
@@ -192,11 +196,22 @@ internal sealed class ToolLoop
         return SerializeSearchResult(result);
     }
 
+    private static List<string> ExtractQueries(IReadOnlyDictionary<string, JsonElement> input)
+    {
+        if (!input.TryGetValue("queries", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+
+        return arr.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+    }
+
     private static SearchParams BuildSearchParams(IReadOnlyDictionary<string, JsonElement> input)
     {
+        // Query is null here — variants are passed via ExtractQueries / SearchMulti.
         string? query = null;
-        if (input.TryGetValue("query", out var q) && q.ValueKind == JsonValueKind.String)
-            query = q.GetString();
 
         DateOnly? dateStart = null;
         if (input.TryGetValue("date_start", out var ds) && ds.ValueKind == JsonValueKind.String

@@ -45,6 +45,46 @@ public sealed class SearchEngine
         return new SearchResult(hits, sources);
     }
 
+    /// <summary>
+    /// Runs multiple FTS5 query variants and fuses the per-variant rankings via
+    /// Reciprocal Rank Fusion. Filters in <paramref name="baseParams"/> apply to
+    /// every variant. Empty/whitespace queries are ignored. Returns RRF scores
+    /// (higher = more relevant, positive) rather than BM25 scores.
+    /// </summary>
+    public SearchResult SearchMulti(IReadOnlyList<string> queries, SearchParams baseParams)
+    {
+        if (!File.Exists(_dbPath))
+            return new SearchResult([], null);
+
+        var cleaned = queries.Where(q => !string.IsNullOrWhiteSpace(q)).ToList();
+        if (cleaned.Count == 0)
+            return Search(baseParams); // fall through to filter-only path
+
+        // Overfetch per variant so the fuser has enough material to find consensus.
+        var perVariantTop = Math.Clamp(baseParams.Top * 2, 30, 50);
+
+        var perVariantLists = new List<IReadOnlyList<SearchHit>>(cleaned.Count);
+        foreach (var q in cleaned)
+        {
+            var p = baseParams with { Query = q, Top = perVariantTop };
+            perVariantLists.Add(Search(p).Hits);
+        }
+
+        var fused = RrfFuser.Fuse(perVariantLists, baseParams.Top);
+
+        IReadOnlyList<SourceSummary>? sources = null;
+        if (baseParams.ListSources && fused.Count > 0)
+        {
+            sources = fused
+                .GroupBy(h => h.SourceFolderId)
+                .Select(g => new SourceSummary(g.Key, g.Count()))
+                .OrderByDescending(s => s.HitCount)
+                .ToList();
+        }
+
+        return new SearchResult(fused, sources);
+    }
+
     private static FilterBuilder BuildFilter(SearchParams p)
     {
         var fb = new FilterBuilder();

@@ -31,10 +31,26 @@ internal static class ToolDefinitions
             Type = JsonSerializer.SerializeToElement("object"),
             Properties = new Dictionary<string, JsonElement>
             {
-                ["query"] = JsonSerializer.SerializeToElement(new
+                ["queries"] = JsonSerializer.SerializeToElement(new
                 {
-                    type = "string",
-                    description = "FTS5 query string. Supports AND (space), OR, phrase quotes, prefix*."
+                    type = "array",
+                    items = new { type = "string" },
+                    minItems = 1,
+                    maxItems = 8,
+                    description = """
+                        FTS5 query variants (1-8). Pass 3-5 phrasings of the same intent in
+                        confidence order (most-likely-correct first). The engine runs each
+                        variant and fuses the per-variant rankings via Reciprocal Rank Fusion:
+                        documents appearing high in multiple variants outrank documents that
+                        appear in only one. Useful variant types:
+                          - literal (user's terms with alias OR expansion)
+                          - phrase-quoted ("AWS Atlas")
+                          - NEAR-proximity (atlas NEAR/5 decision)
+                          - summary-targeted ({summary}: atlas)
+                          - path-hinted ({path}: standup)
+                        Single-element array is fine for trivial lookups; multi-variant is the
+                        default for anything conversational.
+                        """
                 }),
                 ["date_start"] = JsonSerializer.SerializeToElement(new
                 {
