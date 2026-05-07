@@ -34,7 +34,7 @@ public sealed class ToolDefinitionsTests
         var tools = ToolDefinitions.Build();
         var searchTool = GetTool(tools, "search");
 
-        searchTool.InputSchema.Properties.Should().ContainKey("query");
+        searchTool.InputSchema.Properties.Should().ContainKey("queries");
         searchTool.InputSchema.Properties.Should().ContainKey("date_start");
         searchTool.InputSchema.Properties.Should().ContainKey("people");
         searchTool.InputSchema.Properties.Should().ContainKey("source_type");

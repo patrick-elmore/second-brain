@@ -13,7 +13,7 @@ namespace SecondBrain.Llm;
 
 public sealed class ClaudeSession
 {
-    private readonly IAnthropicClient _client;
+    private readonly IMessageCreator _client;
     private readonly ToolLoop _toolLoop;
     private readonly Compactor _compactor;
     private readonly StatePersistence? _statePersistence;
@@ -32,7 +32,7 @@ public sealed class ClaudeSession
     private int _messagesSinceLastPersist;
 
     public ClaudeSession(
-        IAnthropicClient client,
+        IMessageCreator client,
         SearchEngine searchEngine,
         FileReader fileReader,
         Compactor compactor,

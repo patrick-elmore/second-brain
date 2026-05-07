@@ -22,14 +22,14 @@ internal sealed class ToolLoopResult
 
 internal sealed class ToolLoop
 {
-    private readonly IAnthropicClient _client;
+    private readonly IMessageCreator _client;
     private readonly SearchEngine _searchEngine;
     private readonly FileReader _fileReader;
     private readonly ILogger _logger;
     private readonly IStatsRecorder? _stats;
     private readonly bool _supportsOutputConfig;
 
-    public ToolLoop(IAnthropicClient client, SearchEngine searchEngine, FileReader fileReader, ILogger? logger = null, IStatsRecorder? stats = null)
+    public ToolLoop(IMessageCreator client, SearchEngine searchEngine, FileReader fileReader, ILogger? logger = null, IStatsRecorder? stats = null)
     {
         _client = client;
         _searchEngine = searchEngine;
@@ -78,7 +78,7 @@ internal sealed class ToolLoop
             if (_supportsOutputConfig)
                 createParams = createParams with { OutputConfig = new OutputConfig { Effort = apiEffort } };
 
-            var response = await _client.Messages.Create(createParams, ct);
+            var response = await _client.CreateAsync(createParams, ct);
 
             inputTokens += response.Usage.InputTokens;
             outputTokens += response.Usage.OutputTokens;

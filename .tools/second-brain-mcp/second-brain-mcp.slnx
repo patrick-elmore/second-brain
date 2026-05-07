@@ -9,5 +9,6 @@
     <Project Path="src/SecondBrain.Llm.Tests/SecondBrain.Llm.Tests.csproj" />
     <Project Path="src/SecondBrain.Llm/SecondBrain.Llm.csproj" />
     <Project Path="src/SecondBrain.Mcp/SecondBrain.Mcp.csproj" />
+    <Project Path="src/SecondBrain.Mcp.Tests/SecondBrain.Mcp.Tests.csproj" />
   </Folder>
 </Solution>

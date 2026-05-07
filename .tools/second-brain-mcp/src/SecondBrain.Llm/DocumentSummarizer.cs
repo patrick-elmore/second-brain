@@ -20,7 +20,7 @@ public sealed class DocumentSummarizer
     /// <summary>Maximum chars of document content per API call (≈20K tokens).</summary>
     public const int ContentBudgetChars = 80_000;
 
-    private readonly IAnthropicClient _client;
+    private readonly IMessageCreator _client;
     private readonly ILogger _logger;
     private readonly IStatsRecorder? _stats;
     private readonly bool _supportsOutputConfig;
@@ -30,7 +30,7 @@ public sealed class DocumentSummarizer
         @"={5}BEGIN:SUMMARY:(\d+)={5}\s*(.*?)\s*={5}END:SUMMARY:\1={5}",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
-    public DocumentSummarizer(IAnthropicClient client, ILogger? logger = null, IStatsRecorder? stats = null)
+    public DocumentSummarizer(IMessageCreator client, ILogger? logger = null, IStatsRecorder? stats = null)
     {
         _client = client;
         _logger = logger ?? NullLogger.Instance;
@@ -107,7 +107,7 @@ public sealed class DocumentSummarizer
         string responseText;
         try
         {
-            var response = await _client.Messages.Create(createParams, ct);
+            var response = await _client.CreateAsync(createParams, ct);
             _stats?.RecordLlmCall(
                 "claude-haiku-4-5",
                 response.Usage.InputTokens,

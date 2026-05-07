@@ -23,7 +23,8 @@ public static class ClaudeSessionFactory
         ILogger? logger = null,
         IStatsRecorder? stats = null)
     {
-        var client = BuildClient(apiKey, vertexBaseUrl);
+        var rawClient = BuildClient(apiKey, vertexBaseUrl);
+        var client = new AnthropicMessageCreator(rawClient);
         var compactor = new Compactor(client, escalationModel, stats);
         var statePersistence = new StatePersistence(statePath, stateBackupCount);
 

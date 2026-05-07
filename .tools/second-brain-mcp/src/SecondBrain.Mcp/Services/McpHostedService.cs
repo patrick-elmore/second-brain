@@ -91,7 +91,8 @@ public sealed class McpHostedService : IHostedService
 
         // Build a separate client for the document summarizer (same credentials,
         // separate instance so it doesn't share state with the session client).
-        var summarizerClient = ClaudeSessionFactory.BuildClient(apiKey, sb.VertexBaseUrl);
+        var summarizerRawClient = ClaudeSessionFactory.BuildClient(apiKey, sb.VertexBaseUrl);
+        var summarizerClient = new AnthropicMessageCreator(summarizerRawClient);
         var summarizer = new DocumentSummarizer(summarizerClient, _logger, statsTracker);
 
         var handler = new SecondBrainMcpHandler(

@@ -7,11 +7,11 @@ namespace SecondBrain.Llm;
 
 public sealed class Compactor
 {
-    private readonly IAnthropicClient _client;
+    private readonly IMessageCreator _client;
     private readonly string _compactionModel;
     private readonly IStatsRecorder? _stats;
 
-    public Compactor(IAnthropicClient client, string compactionModel = "claude-sonnet-4-6", IStatsRecorder? stats = null)
+    public Compactor(IMessageCreator client, string compactionModel = "claude-sonnet-4-6", IStatsRecorder? stats = null)
     {
         _client = client;
         _compactionModel = compactionModel;
@@ -28,7 +28,7 @@ public sealed class Compactor
         // Build a one-shot call: compaction prompt as system, conversation as user
         var conversationText = SerializeConversation(messages);
 
-        var response = await _client.Messages.Create(new MessageCreateParams
+        var response = await _client.CreateAsync(new MessageCreateParams
         {
             Model = _compactionModel,
             MaxTokens = 8192,
