@@ -19,16 +19,19 @@ public sealed class SchemaManager
                 mtime             REAL NOT NULL,
                 indexed_at        TEXT NOT NULL,
                 source_type       TEXT,
-                metadata          TEXT
+                metadata          TEXT,
+                summary           TEXT
             );
 
-            CREATE INDEX IF NOT EXISTS idx_files_source ON files(source_folder_id);
-            CREATE INDEX IF NOT EXISTS idx_files_mtime  ON files(mtime);
-            CREATE INDEX IF NOT EXISTS idx_files_type   ON files(source_type);
+            CREATE INDEX IF NOT EXISTS idx_files_source   ON files(source_folder_id);
+            CREATE INDEX IF NOT EXISTS idx_files_mtime    ON files(mtime);
+            CREATE INDEX IF NOT EXISTS idx_files_type     ON files(source_type);
+            CREATE INDEX IF NOT EXISTS idx_files_summary  ON files(summary);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
                 path,
                 content,
+                summary,
                 tokenize='porter unicode61'
             );
             """;
@@ -52,16 +55,19 @@ public sealed class SchemaManager
                 mtime             REAL NOT NULL,
                 indexed_at        TEXT NOT NULL,
                 source_type       TEXT,
-                metadata          TEXT
+                metadata          TEXT,
+                summary           TEXT
             );
 
-            CREATE INDEX idx_files_source ON files(source_folder_id);
-            CREATE INDEX idx_files_mtime  ON files(mtime);
-            CREATE INDEX idx_files_type   ON files(source_type);
+            CREATE INDEX idx_files_source   ON files(source_folder_id);
+            CREATE INDEX idx_files_mtime    ON files(mtime);
+            CREATE INDEX idx_files_type     ON files(source_type);
+            CREATE INDEX idx_files_summary  ON files(summary);
 
             CREATE VIRTUAL TABLE files_fts USING fts5(
                 path,
                 content,
+                summary,
                 tokenize='porter unicode61'
             );
             """;

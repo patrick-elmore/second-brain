@@ -89,6 +89,11 @@ public sealed class McpHostedService : IHostedService
             logger: _logger,
             stats: statsTracker);
 
+        // Build a separate client for the document summarizer (same credentials,
+        // separate instance so it doesn't share state with the session client).
+        var summarizerClient = ClaudeSessionFactory.BuildClient(apiKey, sb.VertexBaseUrl);
+        var summarizer = new DocumentSummarizer(summarizerClient, _logger, statsTracker);
+
         var handler = new SecondBrainMcpHandler(
             session: session,
             searchEngine: searchEngine,
@@ -96,11 +101,20 @@ public sealed class McpHostedService : IHostedService
             sourcesConfigPath: sourcesConfig,
             ftsDbPath: ftsDbPath,
             indexMaxBytes: sb.IndexMaxBytes,
+            fileReader: fileReader,
+            summarizer: summarizer,
+            mcpTimeoutSeconds: _settings.McpTimeout,
+            summarizeSafetyBufferSeconds: sb.SummarizeSafetyBufferSeconds,
             logger: _logger,
             stats: statsTracker);
 
         await handler.StartAsync(cancellationToken);
         _state.Handler = handler;
+
+#if DEBUG
+        // Simulate anomalous refresh so the override alert can be tested on /stats.
+        statsTracker.SetAnomalousRefresh(247);
+#endif
 
         _logger.LogInformation("{DisplayName} started on port {Port}",
             _settings.DisplayName, _settings.HttpPort);

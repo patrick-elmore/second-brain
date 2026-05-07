@@ -1,10 +1,13 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
 using SecondBrain.Index.Indexing;
 using SecondBrain.Index.RequestHistory;
 using SecondBrain.Index.Search;
 using SecondBrain.Llm;
+using SecondBrain.Files;
 using SecondBrain.Mcp.Services;
 using SecondBrain.Mcp.Stats;
 
@@ -20,7 +23,12 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
     private readonly string _sourcesConfigPath;
     private readonly string _ftsDbPath;
     private readonly int _indexMaxBytes;
+    private readonly FileReader _fileReader;
+    private readonly DocumentSummarizer _summarizer;
+    private readonly int _mcpTimeoutSeconds;
+    private readonly int _summarizeSafetyBufferSeconds;
     private readonly SemaphoreSlim _mutex = new(1, 1);
+    private int _summarizationRunning = 0;
 
     public bool IsHealthy => true;
 
@@ -31,6 +39,10 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         string sourcesConfigPath,
         string ftsDbPath,
         int indexMaxBytes,
+        FileReader fileReader,
+        DocumentSummarizer summarizer,
+        int mcpTimeoutSeconds,
+        int summarizeSafetyBufferSeconds,
         ILogger logger,
         StatsTracker? stats = null)
     {
@@ -40,12 +52,24 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         _sourcesConfigPath = sourcesConfigPath;
         _ftsDbPath = ftsDbPath;
         _indexMaxBytes = indexMaxBytes;
+        _fileReader = fileReader;
+        _summarizer = summarizer;
+        _mcpTimeoutSeconds = mcpTimeoutSeconds;
+        _summarizeSafetyBufferSeconds = summarizeSafetyBufferSeconds;
         _logger = logger;
         _stats = stats;
     }
 
     public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
     public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public bool TryStartSummarization()
+    {
+        if (Interlocked.CompareExchange(ref _summarizationRunning, 1, 0) != 0)
+            return false;
+        _ = Task.Run(() => RunSummarizationAsync(null));
+        return true;
+    }
 
     public async Task<JsonNode> HandleRequestAsync(JsonNode request, CancellationToken ct = default)
     {
@@ -120,6 +144,7 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
                 "session_info" => HandleSessionInfo(),
                 "get_request" => HandleGetRequest(arguments),
                 "rebuild_index" => HandleRebuildIndex(arguments),
+                "generate_summaries" => await HandleGenerateSummariesAsync(arguments, ct),
                 _ => ResponseBuilder.ToolResult($"Unknown tool: {toolName}", isError: true),
             };
 
@@ -424,6 +449,202 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
             snippet_tokens = p.SnippetTokens,
             return_mode = p.ReturnMode,
         });
+    }
+
+    private async Task<JsonNode> HandleGenerateSummariesAsync(JsonObject args, CancellationToken ct)
+    {
+        var sourceTypeFilter = args["source_type"]?.GetValue<string>();
+
+        if (Interlocked.CompareExchange(ref _summarizationRunning, 1, 0) != 0)
+            return ResponseBuilder.ToolResult(new JsonObject { ["status"] = "already_running" }.ToJsonString());
+
+        _ = Task.Run(() => RunSummarizationAsync(sourceTypeFilter));
+
+        return ResponseBuilder.ToolResult(new JsonObject { ["status"] = "started" }.ToJsonString());
+    }
+
+    private async Task RunSummarizationAsync(string? sourceTypeFilter)
+    {
+        const int pageSize = 1000;
+        int processed = 0, skipped = 0;
+        var sw = Stopwatch.StartNew();
+
+        try
+        {
+            while (true)
+            {
+                var rows = LoadUnsummarizedRows(pageSize, sourceTypeFilter);
+                if (rows.Count == 0) break;
+
+                await Parallel.ForEachAsync(rows, new ParallelOptions { MaxDegreeOfParallelism = 5 }, async (row, _) =>
+                {
+                    try
+                    {
+                        var entry = new BatchDocEntry(row.Id, row.AbsolutePath, row.RelativePath, row.SourceType, row.MetadataJson);
+                        var results = await _summarizer.SummarizeBatchAsync([entry], CancellationToken.None);
+                        var result = results.FirstOrDefault(r => r.Id == row.Id);
+
+                        if (result != default)
+                        {
+                            WriteSummary(row.Id, row.RelativePath, result.Summary);
+                            Interlocked.Increment(ref processed);
+                        }
+                        else
+                        {
+                            Interlocked.Increment(ref skipped);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to summarize id={Id}", row.Id);
+                        Interlocked.Increment(ref skipped);
+                    }
+                });
+            }
+
+            _logger.LogInformation("Summarization complete: processed={Processed} skipped={Skipped} elapsed={Elapsed}", processed, skipped, sw.Elapsed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Summarization failed after processed={Processed}", processed);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _summarizationRunning, 0);
+        }
+    }
+
+    private sealed record UnsummarizedRow(long Id, string AbsolutePath, string RelativePath, string? SourceType, string? MetadataJson, long SizeBytes);
+
+    private List<UnsummarizedRow> LoadUnsummarizedRows(int limit, string? sourceTypeFilter)
+    {
+        var connStr = new SqliteConnectionStringBuilder
+        {
+            DataSource = _ftsDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString();
+
+        using var conn = new SqliteConnection(connStr);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+
+        if (string.IsNullOrEmpty(sourceTypeFilter))
+        {
+            cmd.CommandText = "SELECT id, absolute_path, relative_path, source_type, metadata, size_bytes FROM files WHERE summary IS NULL ORDER BY id ASC LIMIT @limit";
+        }
+        else
+        {
+            cmd.CommandText = "SELECT id, absolute_path, relative_path, source_type, metadata, size_bytes FROM files WHERE summary IS NULL AND source_type = @type ORDER BY id ASC LIMIT @limit";
+            cmd.Parameters.AddWithValue("@type", sourceTypeFilter);
+        }
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var rows = new List<UnsummarizedRow>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new UnsummarizedRow(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.GetInt64(5)));
+        }
+        return rows;
+    }
+
+    /// <summary>
+    /// Groups rows into batches whose total effective content stays within
+    /// <see cref="DocumentSummarizer.ContentBudgetChars"/>. Rows that individually
+    /// exceed the budget are placed alone in their own batch.
+    /// </summary>
+    private static List<List<UnsummarizedRow>> BuildDynamicBatches(IReadOnlyList<UnsummarizedRow> rows)
+    {
+        var batches = new List<List<UnsummarizedRow>>();
+        var current = new List<UnsummarizedRow>();
+        int budgetUsed = 0;
+
+        foreach (var row in rows)
+        {
+            var effective = (int)Math.Min(row.SizeBytes, DocumentSummarizer.InputCharLimit(row.SourceType));
+
+            if (current.Count > 0 && budgetUsed + effective > DocumentSummarizer.ContentBudgetChars)
+            {
+                batches.Add(current);
+                current = new List<UnsummarizedRow>();
+                budgetUsed = 0;
+            }
+
+            current.Add(row);
+            budgetUsed += effective;
+        }
+
+        if (current.Count > 0) batches.Add(current);
+        return batches;
+    }
+
+    private void WriteSummary(long id, string relPath, string summary)
+    {
+        var connStr = new SqliteConnectionStringBuilder
+        {
+            DataSource = _ftsDbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+        }.ToString();
+
+        using var conn = new SqliteConnection(connStr);
+        conn.Open();
+        using var txn = conn.BeginTransaction();
+
+        // Read current path and content for the FTS re-insert
+        string path, content;
+        using (var sel = conn.CreateCommand())
+        {
+            sel.Transaction = txn;
+            sel.CommandText = "SELECT relative_path FROM files WHERE id = @id";
+            sel.Parameters.AddWithValue("@id", id);
+            path = (string)sel.ExecuteScalar()!;
+        }
+
+        // Get content from FTS (path column is the relative path; content is the body)
+        using (var sel = conn.CreateCommand())
+        {
+            sel.Transaction = txn;
+            sel.CommandText = "SELECT content FROM files_fts WHERE rowid = @id";
+            sel.Parameters.AddWithValue("@id", id);
+            content = (string?)sel.ExecuteScalar() ?? "";
+        }
+
+        // FTS delete + re-insert with summary
+        using (var del = conn.CreateCommand())
+        {
+            del.Transaction = txn;
+            del.CommandText = "DELETE FROM files_fts WHERE rowid = @id";
+            del.Parameters.AddWithValue("@id", id);
+            del.ExecuteNonQuery();
+        }
+        using (var ins = conn.CreateCommand())
+        {
+            ins.Transaction = txn;
+            ins.CommandText = "INSERT INTO files_fts(rowid, path, content, summary) VALUES (@id, @path, @content, @summary)";
+            ins.Parameters.AddWithValue("@id", id);
+            ins.Parameters.AddWithValue("@path", path);
+            ins.Parameters.AddWithValue("@content", content);
+            ins.Parameters.AddWithValue("@summary", summary);
+            ins.ExecuteNonQuery();
+        }
+
+        // Update files table
+        using (var upd = conn.CreateCommand())
+        {
+            upd.Transaction = txn;
+            upd.CommandText = "UPDATE files SET summary = @summary WHERE id = @id";
+            upd.Parameters.AddWithValue("@summary", summary);
+            upd.Parameters.AddWithValue("@id", id);
+            upd.ExecuteNonQuery();
+        }
+
+        txn.Commit();
     }
 
     private static string GenerateRequestId()

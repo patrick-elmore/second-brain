@@ -23,7 +23,10 @@
     "state_backup_count": 5,
 
     "index_max_bytes": 5000000,
+    "index_refresh_interval_seconds": 3600,
 
-    "vertex_base_url": ""
+    "vertex_base_url": "",
+
+    "summarize_safety_buffer_seconds": 30
   }
 }

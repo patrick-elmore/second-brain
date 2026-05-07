@@ -79,7 +79,8 @@ public sealed class IndexRefreshService : BackgroundService
                     summary.Added, summary.Modified, summary.Removed,
                     summary.Unchanged, summary.Skipped, summary.Elapsed);
 
-                if (summary.Added + summary.Modified + summary.Removed > 0)
+                var changed = summary.Added + summary.Modified;
+                if (changed > 0 || summary.Removed > 0)
                 {
                     _logger.LogInformation(
                         "Index auto-refresh: added={Added} modified={Modified} removed={Removed} unchanged={Unchanged} skipped={Skipped} elapsed={Elapsed}",
@@ -91,6 +92,21 @@ public sealed class IndexRefreshService : BackgroundService
                     _logger.LogDebug(
                         "Index auto-refresh: no changes (unchanged={Unchanged} skipped={Skipped} elapsed={Elapsed})",
                         summary.Unchanged, summary.Skipped, summary.Elapsed);
+                }
+
+                if (changed > 200)
+                {
+                    _state.StatsTracker?.SetAnomalousRefresh(changed);
+                    _logger.LogWarning(
+                        "Index auto-refresh: {Changed} files added/modified — exceeds anomaly threshold (200). Summarization blocked pending override.",
+                        changed);
+                }
+                else if (changed > 0)
+                {
+                    _state.StatsTracker?.ClearAnomalousRefresh();
+                    var started = _state.Handler?.TryStartSummarization() ?? false;
+                    if (started)
+                        _logger.LogInformation("Index auto-refresh: triggered summarization for {Changed} new/modified files", changed);
                 }
             }
             catch (Exception ex)

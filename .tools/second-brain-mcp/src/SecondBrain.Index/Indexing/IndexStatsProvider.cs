@@ -46,6 +46,7 @@ public sealed class IndexStatsProvider
             int fileCount = 0;
             long totalBytes = 0;
             DateTimeOffset? lastIndexed = null;
+            int summarizedCount = 0;
 
             using (var cmd = conn.CreateCommand())
             {
@@ -58,6 +59,12 @@ public sealed class IndexStatsProvider
                     if (!r.IsDBNull(2) && DateTimeOffset.TryParse(r.GetString(2), out var parsed))
                         lastIndexed = parsed;
                 }
+            }
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT COUNT(*) FROM files WHERE summary IS NOT NULL";
+                summarizedCount = (int)(long)cmd.ExecuteScalar()!;
             }
 
             var bySource = ReadBuckets(conn,
@@ -74,7 +81,8 @@ public sealed class IndexStatsProvider
                 DbFileSizeBytes: dbBytes,
                 DbFileMTime: dbMTime,
                 BySourceFolder: bySource,
-                BySourceType: byType);
+                BySourceType: byType,
+                SummarizedCount: summarizedCount);
         }
         catch
         {
@@ -84,7 +92,7 @@ public sealed class IndexStatsProvider
 
     private static IndexStatsSnapshot Empty(long dbBytes, DateTimeOffset? dbMTime) =>
         new(Exists: false, FileCount: 0, TotalIndexedBytes: 0, LastIndexedAt: null,
-            DbFileSizeBytes: dbBytes, DbFileMTime: dbMTime, BySourceFolder: [], BySourceType: []);
+            DbFileSizeBytes: dbBytes, DbFileMTime: dbMTime, BySourceFolder: [], BySourceType: [], SummarizedCount: 0);
 
     private static IReadOnlyList<IndexBucket> ReadBuckets(SqliteConnection conn, string sql)
     {
@@ -106,6 +114,7 @@ public sealed record IndexStatsSnapshot(
     long DbFileSizeBytes,
     DateTimeOffset? DbFileMTime,
     IReadOnlyList<IndexBucket> BySourceFolder,
-    IReadOnlyList<IndexBucket> BySourceType);
+    IReadOnlyList<IndexBucket> BySourceType,
+    int SummarizedCount);
 
 public sealed record IndexBucket(string Key, long Count);

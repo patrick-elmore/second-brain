@@ -72,5 +72,12 @@ public static class McpEndpoints
                 return Results.Json(new { error = "Stats not initialized" }, statusCode: 503);
             return Results.Json(state.StatsTracker.GetStats());
         });
+
+        app.MapPost("/summarize/override", ([FromServices] McpServiceState state) =>
+        {
+            state.StatsTracker?.ClearAnomalousRefresh();
+            state.Handler?.TryStartSummarization();
+            return Results.Redirect("/stats");
+        });
     }
 }

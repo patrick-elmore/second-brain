@@ -81,7 +81,7 @@ public sealed class IndexBuilder
 
             using var insertFts = conn.CreateCommand();
             insertFts.Transaction = txn;
-            insertFts.CommandText = "INSERT INTO files_fts(rowid, path, content) VALUES (@rowid, @path, @content)";
+            insertFts.CommandText = "INSERT INTO files_fts(rowid, path, content, summary) VALUES (@rowid, @path, @content, '')";
             insertFts.Parameters.Add("@rowid", SqliteType.Integer);
             insertFts.Parameters.Add("@path", SqliteType.Text);
             insertFts.Parameters.Add("@content", SqliteType.Text);

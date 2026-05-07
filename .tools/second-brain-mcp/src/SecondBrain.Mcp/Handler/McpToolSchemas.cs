@@ -14,7 +14,8 @@ internal static class McpToolSchemas
         ResetSessionTool(),
         SessionInfoTool(),
         GetRequestTool(),
-        RebuildIndexTool()
+        RebuildIndexTool(),
+        GenerateSummariesTool()
     );
 
     private static JsonObject SearchTool() => new()
@@ -111,6 +112,20 @@ internal static class McpToolSchemas
             ["properties"] = new JsonObject
             {
                 ["mode"] = Prop("string", "incremental (default) or full"),
+            },
+        },
+    };
+
+    private static JsonObject GenerateSummariesTool() => new()
+    {
+        ["name"] = "generate_summaries",
+        ["description"] = "Generates LLM summaries for unsummarized documents in the index. Runs Haiku with dynamic content-budget batching (5 parallel calls) for up to 90 seconds then returns. Resumable — reruns only process documents where summary IS NULL.",
+        ["inputSchema"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["source_type"] = Prop("string", "Optional: only summarize files of this type (transcript, standup, 1on1, planning, note)"),
             },
         },
     };

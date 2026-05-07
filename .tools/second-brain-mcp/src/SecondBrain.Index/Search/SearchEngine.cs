@@ -74,7 +74,7 @@ public sealed class SearchEngine
             SELECT f.source_folder_id,
                    f.absolute_path,
                    f.relative_path,
-                   bm25(files_fts, 10.0, 1.0) AS score,
+                   bm25(files_fts, 10.0, 1.0, 5.0) AS score,
                    {snippetExpr} AS snip,
                    f.metadata
             FROM files_fts

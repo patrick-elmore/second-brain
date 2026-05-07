@@ -1,12 +1,12 @@
 ---
-name: beta-brain
+name: brain
 description: Query your second brain MCP. Subcommands cover search, ask, session management, request retrieval, and index rebuilding. Agents should use this skill whenever they need to retrieve information from the user's personal knowledge corpus (meeting transcripts, daily notes, planning artifacts, performance review documents) rather than searching the web or guessing.
-argument-hint: "[ask|search|compact|reset|info|get|rebuild] [--effort low|medium|high] [--filter date:YYYY-MM-DD..YYYY-MM-DD] [--filter people:name] [--filter type:transcript] [--filter folder:id] [--top N] [--paths] [--list-sources] [--fields f1,f2] <text>"
+argument-hint: "[ask|search|compact|reset|info|get|rebuild|summarize] <query>"
 ---
 
 # /brain skill
 
-Thin wrapper around the seven tools on the `second-brain` MCP. Pick a subcommand;
+Thin wrapper around the eight tools on the `second-brain` MCP. Pick a subcommand;
 the rest of the input is the query/argument. Defaults to `ask` when no subcommand
 is recognized.
 
@@ -21,13 +21,14 @@ is recognized.
 | `info` | `session_info` | Report current session metadata |
 | `get` | `get_request` | Fetch a stored request entity by ID |
 | `rebuild` | `rebuild_index` | Update the FTS index (incremental by default; pass `full` for nuclear rebuild) |
+| `summarize` | `generate_summaries` | Start background summarization of all unsummarized documents (fire-and-forget). Optional flag: `--type <source_type>` to filter by document type. |
 
 ## Workflow
 
 ### Step 1: Parse
 
 Treat the first whitespace-delimited token as a subcommand if it matches
-`ask|search|compact|reset|info|get|rebuild`. Otherwise treat the entire input as
+`ask|search|compact|reset|info|get|rebuild|summarize`. Otherwise treat the entire input as
 the query for `ask`.
 
 Parse the following flags from the remaining text. Anything left after flags
@@ -66,6 +67,7 @@ Call the matching MCP tool with the parsed arguments.
 | `info` | `mcp__second-brain__session_info` |
 | `get` | `mcp__second-brain__get_request` with `{ request_id, fields? }` |
 | `rebuild` | `mcp__second-brain__rebuild_index` with `{ mode? }` (`"full"` if positional arg is `full`, else omit for default `incremental`) |
+| `summarize` | `mcp__second-brain__generate_summaries` with `{ source_type? }` parsed from `--type` flag |
 
 ### Step 3: Display
 
@@ -92,6 +94,8 @@ record later with `/brain get <id>`.
 **`get`:** Pretty-print the returned entity as JSON in a code block.
 
 **`rebuild`:** Render `Mode: {mode} · added: {added} · modified: {modified} · removed: {removed} · unchanged: {unchanged} · skipped: {skipped} ({elapsed_seconds}s)` for incremental, or `Mode: full · indexed: {indexed} · skipped: {skipped} ({elapsed_seconds}s)` for full.
+
+**`summarize`:** Render `Summarization {status}` (status is `started` or `already_running`).
 
 ## Errors
 

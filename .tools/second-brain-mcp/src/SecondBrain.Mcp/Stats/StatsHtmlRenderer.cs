@@ -41,6 +41,11 @@ internal static class StatsHtmlRenderer
             footer { margin-top: 2rem; font-size: .85rem; color: #777; }
             footer a { color: #9ab; text-decoration: none; }
             footer a:hover { text-decoration: underline; }
+            .alert { background: #3a1f00; border: 1px solid #c07000; border-radius: 4px; padding: .75rem 1rem; margin: 1rem 0; color: #f0c060; }
+            .alert strong { color: #ffd080; }
+            .alert form { display: inline; margin-left: 1rem; }
+            .alert button { background: #c07000; color: #fff; border: none; padding: .3rem .8rem; border-radius: 3px; cursor: pointer; font-size: .9rem; }
+            .alert button:hover { background: #e08800; }
             </style>
             </head><body>
             """);
@@ -52,6 +57,7 @@ internal static class StatsHtmlRenderer
           .Append(Esc(FormatTimestamp(node["stats_since"])))
           .Append("</p>");
 
+        RenderAnomalyAlert(sb, node["anomalous_pending_count"]);
         RenderLlm(sb, node["llm"]);
         RenderIndex(sb, node["index"]);
         RenderToolCalls(sb, node["tool_calls"]);
@@ -61,6 +67,23 @@ internal static class StatsHtmlRenderer
         sb.Append("<footer><a href=\"/stats.json\">raw JSON</a> · <a href=\"/health\">health</a></footer>");
         sb.Append("</body></html>");
         return sb.ToString();
+    }
+
+    private static void RenderAnomalyAlert(StringBuilder sb, JsonNode? countNode)
+    {
+        long count = 0;
+        try { count = countNode?.GetValue<long>() ?? 0; } catch { }
+        if (count <= 0) return;
+
+        sb.Append("<div class=\"alert\">")
+          .Append("<strong>⚠ Summarization blocked.</strong> The last index refresh found <strong>")
+          .Append(count.ToString("N0", CultureInfo.InvariantCulture))
+          .Append("</strong> new or modified files — above the anomaly threshold of 200. ")
+          .Append("Summarization was not started automatically.")
+          .Append("<form method=\"post\" action=\"/summarize/override\">")
+          .Append("<button type=\"submit\">Proceed with summarization</button>")
+          .Append("</form>")
+          .Append("</div>");
     }
 
     private static void RenderLlm(StringBuilder sb, JsonNode? llm)
@@ -160,8 +183,14 @@ internal static class StatsHtmlRenderer
             return;
         }
 
+        var fileCount = obj["file_count"];
+        var summarizedCount = obj["summarized_count"];
         sb.Append("<div class=\"pair\"><span class=\"k\">files indexed</span><span class=\"v\">")
-          .Append(FormatLong(obj["file_count"]))
+          .Append(FormatLong(fileCount))
+          .Append("</span> · <span class=\"k\">summarized</span><span class=\"v\">")
+          .Append(FormatLong(summarizedCount))
+          .Append(" / ")
+          .Append(FormatLong(fileCount))
           .Append("</span> · <span class=\"k\">indexed bytes</span><span class=\"v\">")
           .Append(FormatBytes(obj["total_indexed_bytes"]))
           .Append("</span> · <span class=\"k\">db file</span><span class=\"v\">")

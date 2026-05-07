@@ -236,7 +236,7 @@ public sealed class IndexUpdater
     {
         var cmd = conn.CreateCommand();
         cmd.Transaction = txn;
-        cmd.CommandText = "INSERT INTO files_fts(rowid, path, content) VALUES (@rowid, @path, @content)";
+        cmd.CommandText = "INSERT INTO files_fts(rowid, path, content, summary) VALUES (@rowid, @path, @content, '')";
         cmd.Parameters.Add("@rowid", SqliteType.Integer);
         cmd.Parameters.Add("@path", SqliteType.Text);
         cmd.Parameters.Add("@content", SqliteType.Text);

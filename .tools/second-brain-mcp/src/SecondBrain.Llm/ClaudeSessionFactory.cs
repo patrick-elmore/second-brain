@@ -41,7 +41,7 @@ public static class ClaudeSessionFactory
             stats: stats);
     }
 
-    private static IAnthropicClient BuildClient(string apiKey, string? vertexBaseUrl)
+    public static IAnthropicClient BuildClient(string apiKey, string? vertexBaseUrl)
     {
         var useVertex = string.Equals(
             Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_VERTEX"),

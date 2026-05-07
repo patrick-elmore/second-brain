@@ -81,6 +81,14 @@ public sealed class SecondBrainSettings
     public int IndexRefreshIntervalSeconds { get; set; } = 300;
 
     /// <summary>
+    /// Seconds before <c>McpTimeout</c> expires at which the summarizer stops
+    /// dispatching new batch waves. Ensures in-flight requests complete and the
+    /// response is returned before the MCP connection times out.
+    /// </summary>
+    [JsonPropertyName("summarize_safety_buffer_seconds")]
+    public int SummarizeSafetyBufferSeconds { get; set; } = 30;
+
+    /// <summary>
     /// Optional override for the Vertex base URL. Used to route requests through a
     /// local proxy. The Vertex SDK derives BaseUrl from region in its constructor,
     /// so this is applied via the client's init-only BaseUrl property after

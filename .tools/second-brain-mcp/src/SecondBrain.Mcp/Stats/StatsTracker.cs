@@ -25,6 +25,7 @@ public sealed class StatsTracker : IStatsRecorder
     private long _totalRefreshes;
     private DateTimeOffset? _lastRefreshAt;
     private RefreshSummary? _lastRefresh;
+    private long _anomalousPendingCount;
 
     // Hourly buckets of MCP tool calls (last 24h).
     private readonly ConcurrentDictionary<DateTimeOffset, long> _hourlyToolCalls = new();
@@ -61,6 +62,12 @@ public sealed class StatsTracker : IStatsRecorder
 
         LoadFromDisk();
     }
+
+    public void SetAnomalousRefresh(long pendingCount) =>
+        Interlocked.Exchange(ref _anomalousPendingCount, pendingCount);
+
+    public void ClearAnomalousRefresh() =>
+        Interlocked.Exchange(ref _anomalousPendingCount, 0L);
 
     public void RecordIndexRefresh(int added, int modified, int removed, int unchanged, int skipped, TimeSpan elapsed)
     {
@@ -174,6 +181,7 @@ public sealed class StatsTracker : IStatsRecorder
         {
             uptime = (now - _processStarted).ToString(@"d\.hh\:mm\:ss"),
             stats_since = _statsSince,
+            anomalous_pending_count = Interlocked.Read(ref _anomalousPendingCount),
             tool_calls = new
             {
                 last_24h = last24h,
@@ -244,6 +252,7 @@ public sealed class StatsTracker : IStatsRecorder
         {
             exists = snap.Exists,
             file_count = snap.FileCount,
+            summarized_count = snap.SummarizedCount,
             total_indexed_bytes = snap.TotalIndexedBytes,
             db_file_bytes = snap.DbFileSizeBytes,
             db_file_mtime = snap.DbFileMTime,

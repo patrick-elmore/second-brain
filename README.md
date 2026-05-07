@@ -25,7 +25,8 @@ If you are an agent reading this README to learn the interface, jump to [MCP too
                                    │  │  ├─ reset_session            │  │
                                    │  │  ├─ session_info             │  │
                                    │  │  ├─ get_request              │  │
-                                   │  │  └─ rebuild_index            │  │
+                                   │  │  ├─ rebuild_index            │  │
+                                   │  │  └─ generate_summaries       │  │
                                    │  └──────────────┬───────────────┘  │
                                    │                 │                  │
                                    │  ┌──────────────▼───────────────┐  │
@@ -95,7 +96,7 @@ The service is a long-running Windows daemon. It is always-on and stateful betwe
 
 ## MCP tools
 
-All seven tools are exposed via JSON-RPC at `POST /mcp`. The service implements the MCP `initialize`, `tools/list`, and `tools/call` methods. Every tool returns a `request_id` (search, ask) or status payload that callers can inspect later.
+All eight tools are exposed via JSON-RPC at `POST /mcp`. The service implements the MCP `initialize`, `tools/list`, and `tools/call` methods. Every tool returns a `request_id` (search, ask) or status payload that callers can inspect later.
 
 ### `search` — deterministic FTS5
 
@@ -164,7 +165,8 @@ Routes a question through the in-process Claude session. The session has its own
   "files_referenced": [               // every file the session opened during this ask
     "C:\\data\\...\\2026-04-12 Standup.md",
     "C:\\repos\\...\\.context\\atlas-decision.md"
-  ]
+  ],
+  "estimated_cost_usd": 0.000412     // tool-loop + any in-ask compaction cost
 }
 ```
 
@@ -178,7 +180,7 @@ Runs the session's prior conversation through the compaction model (`claude-sonn
 |---|---|---|---|
 | `instruction` | string | none | Additional steering for what to keep. The standard prompt is always applied first. |
 
-**Returns:** `messages_before`, `messages_after`, `approximate_tokens_before`, `approximate_tokens_after`.
+**Returns:** `messages_before`, `messages_after`, `approximate_tokens_before`, `approximate_tokens_after`, `estimated_cost_usd`.
 
 Compaction also fires automatically when `approximate_tokens` exceeds the threshold (default 150,000) at the start of an `ask`.
 
@@ -239,6 +241,36 @@ If the index file doesn't exist or has no `files` table when `incremental` is re
 ```
 
 The MCP handler's per-call mutex serialises rebuilds against `ask` and `search`, and the database uses WAL mode so search readers operating in other connections aren't blocked. Adding a *new* source folder to `sources.json` will be picked up by the rebuild, but the in-memory `FileReader`'s allowed-roots set is only refreshed at service start — restart the service after the rebuild if you've added a folder you want the LLM's `read_file` tool to be able to access.
+
+### `generate_summaries` — document summarization
+
+Generates LLM summaries for unsummarized documents and stores them in the `summary` column of `fts.db`. Summaries are indexed as a third FTS5 column (BM25 weight 5.0, between path at 10.0 and content at 1.0), improving retrieval for queries that rely on meaning rather than exact terms.
+
+**The tool is fire-and-forget.** It returns immediately after starting a background task. The background task maintains a pool of 5 concurrent Haiku calls, one document per call, and runs until every unsummarized document has been processed. Progress is logged to the service log. Calling again while a run is in progress returns `already_running`.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `source_type` | string | none | Restrict to one source type: `transcript`, `standup`, `1on1`, `planning`, `note`. |
+
+The tool is resumable — it only selects rows where `summary IS NULL`. If the service restarts mid-run, the next call picks up where it left off.
+
+**Returns:**
+```jsonc
+{ "status": "started" }       // background task launched
+{ "status": "already_running" } // a run was already in progress
+```
+
+Two ways to invoke:
+```
+/brain summarize               # summarize all unsummarized docs
+/brain summarize --type 1on1   # 1:1s only
+```
+
+Or directly:
+```jsonc
+mcp__second-brain__generate_summaries({})
+mcp__second-brain__generate_summaries({ "source_type": "1on1" })
+```
 
 ---
 
@@ -316,6 +348,7 @@ Walks `root` to `max_depth` directories deep, indexes every directory whose name
 | `repos-context` | discover `.context` | `C:\repos` |
 | `misc-context` | discover `.context` | `C:\misc` |
 | `your-data` | static (excludes `.obsidian`, `claude-docs`) | `C:\data\your-data` |
+| `wholesale-planning` | static (excludes `.tools`) | `C:\repos\your-planning-repo` |
 
 ---
 
@@ -335,17 +368,19 @@ CREATE TABLE files (
     mtime             REAL NOT NULL,
     indexed_at        TEXT NOT NULL,
     source_type       TEXT,           -- transcript, standup, 1on1, planning, note
-    metadata          TEXT            -- JSON: parsed frontmatter
+    metadata          TEXT,           -- JSON: parsed frontmatter
+    summary           TEXT            -- LLM-generated retrieval summary (NULL until generated)
 );
 
 CREATE VIRTUAL TABLE files_fts USING fts5(
     path,                              -- relative_path; weight 10.0 in BM25
     content,                           -- file body; weight 1.0
+    summary,                           -- LLM summary; weight 5.0
     tokenize='porter unicode61'
 );
 ```
 
-Built by `SecondBrain.IndexBuilder.exe` in a single transaction. Files larger than 5 MB and binary files are skipped.
+Built by `SecondBrain.IndexBuilder.exe` in a single transaction. Files larger than 5 MB and binary files are skipped. The `summary` column is `NULL` at index time and populated separately by `generate_summaries`.
 
 ### Frontmatter parsing
 
@@ -397,7 +432,7 @@ Beyond the MCP JSON-RPC endpoint, the service exposes three GETs for diagnostics
 | POST | `/mcp` | JSON-RPC 2.0 entry point. Accepts `initialize`, `tools/list`, `tools/call`. |
 | GET | `/health` | `{"status": "healthy", "service": "SecondBrainHttpMcp", "version": "1.0.0"}`. Returns 503 if the handler isn't ready. |
 | GET | `/.well-known/mcp` | Discovery: protocol version, transport, endpoint URL. |
-| GET | `/stats` | HTML dashboard summarizing per-model LLM usage (requests, tokens, cache hits, estimated USD cost via `pricing.json`), tool call counts (last 24h, by name), file read counts, **index state** (file count, total indexed bytes, db file size, last indexed-row timestamp, breakdown by source folder and source type), **auto-refresh activity** (refreshes since start, last run, last delta), and process memory. |
+| GET | `/stats` | HTML dashboard summarizing per-model LLM usage (requests, tokens, cache hits, estimated USD cost via `pricing.json`), tool call counts (last 24h, by name), file read counts, **index state** (file count, summarized count, total indexed bytes, db file size, last indexed-row timestamp, breakdown by source folder and source type), **auto-refresh activity** (refreshes since start, last run, last delta), and process memory. |
 | GET | `/stats.json` | Same data as `/stats`, raw JSON for programmatic consumers. |
 
 `/stats` is useful for monitoring cost. The dashboard surfaces total estimated USD and a per-model breakdown with `cache_creation_tokens` and `cache_read_tokens` so you can verify caching is firing. Use `/stats.json` for the same data as raw JSON.
@@ -423,6 +458,7 @@ Key fields:
 - `second_brain.index_max_bytes` — file-size cap for indexing (`5000000`).
 - `second_brain.index_refresh_interval_seconds` — interval for the background incremental-refresh loop (`300` = every 5 minutes). Set to `0` to disable. The loop runs once on startup to catch drift, then on the configured cadence.
 - `second_brain.vertex_base_url` — optional override for the Vertex endpoint. When non-empty, the service routes Vertex requests to this URL (e.g. `http://localhost:9996` for a local proxy) instead of the SDK's region-derived Google URL. Leave as `""` to use the default.
+- `second_brain.summarize_safety_buffer_seconds` — reserved; not currently used.
 
 ### `config/pricing.json` (versioned in repo)
 
@@ -522,10 +558,10 @@ The persistent session reloads from `session-state.json` on start.
 
 `~/.claude/skills/brain/SKILL.md` is a thin parser that maps user input into MCP tool calls. The skill:
 
-1. Splits the first token off as a subcommand (`ask`, `search`, `compact`, `reset`, `info`, `get`). Defaults to `ask`.
-2. Strips known flags (`--effort`, `--filter`, `--top`, `--paths`, `--list-sources`, `--fields`).
+1. Splits the first token off as a subcommand (`ask`, `search`, `compact`, `reset`, `info`, `get`, `rebuild`, `summarize`). Defaults to `ask`.
+2. Strips known flags (`--effort`, `--filter`, `--top`, `--paths`, `--list-sources`, `--fields`, `--type`).
 3. Dispatches to `mcp__second-brain__<tool>` with the parsed args.
-4. Renders the response in a human-readable format.
+4. Renders the response in a human-readable format. `ask` responses include a footer with `request_id`, `model_used`, `tools_called`, and `estimated_cost_usd`.
 
 Subcommands are 1:1 with MCP tools. The skill exists for convenience — the underlying capability is identical to direct MCP invocation.
 

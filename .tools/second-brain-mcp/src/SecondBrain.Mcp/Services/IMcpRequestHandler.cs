@@ -8,4 +8,5 @@ public interface IMcpRequestHandler
     bool IsHealthy { get; }
     Task StartAsync(CancellationToken ct = default);
     Task StopAsync(CancellationToken ct = default);
+    bool TryStartSummarization();
 }
