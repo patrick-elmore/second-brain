@@ -46,6 +46,15 @@ Before doing anything that costs LLM calls or touches git:
 
 4. **Baseline tests must pass.** `dotnet.exe test second-brain-mcp.slnx --verbosity minimal`. Capture the count for the cycle's "before" baseline. If any tests fail, abort.
 
+5. **Load prior recommendations.** Read `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/next-run.md` if it exists. This file is written at the end of every cycle and reflects what the prior cycle suggested for this one. Print its contents verbatim under a heading "PRIOR-CYCLE RECOMMENDATIONS" so the user sees them before any LLM calls happen.
+
+   For each item in the prior recommendations:
+   - **Tuning suggestion** (e.g., raise iteration cap, switch surface): if the user invoked the skill with no overriding argument, apply the suggestion to this cycle's parameters. Print "Applying: <suggestion>" so it's auditable. If the user passed a conflicting argument (e.g., `--iteration-cap 3` overriding a "raise to 5" suggestion), the user's argument wins; print "User override: <arg> overrides recommendation <suggestion>".
+   - **Carried-forward findings** (unresolved flagged items from prior cycles): print them as a checklist. Do NOT auto-act on them — they were flagged for human judgment originally; they remain so.
+   - **Operational tasks** (e.g., promote pinned-best to production, regenerate test cases): print as reminders. Do NOT auto-act unless explicitly told the skill should.
+
+   If `next-run.md` does not exist, this is either the first cycle or the file was deleted. Print "No prior-cycle recommendations file." and proceed.
+
 ## Phase 1: Run the eval
 
 Parse arguments:
@@ -224,14 +233,18 @@ Compare against the original baseline from Phase 2:
 
 ## Phase 6: Commit improvements
 
-If no auto-fixes were applied AND no findings were written, skip the commit and report "cycle complete — no improvements this round."
+First, generate `state/next-run.md` per the format defined in Phase 7. The file always exists at the end of every cycle, even when no fixes are applied — its purpose is to seed the next run.
 
-Otherwise stage:
-- All code/test changes from Phase 4
-- The findings doc from Phase 3
+Stage:
+- `state/next-run.md` (always — this is the new requirement)
+- All code/test changes from Phase 4 (if any)
+- The findings doc from Phase 3 (if any)
 
-Commit message format:
+Even when no fixes are applied AND no findings were written, still commit so `next-run.md` is captured. There is always a commit 2 of 2 now.
 
+Commit message format depends on what's in the commit:
+
+If fixes or findings present:
 ```
 prompt-eval cycle <date>: <N> bug(s) fixed, baseline F2 <before>→<after>
 
@@ -244,6 +257,19 @@ Flagged for review (no auto-fix):
 - <one-line per flagged item, see state/findings/<phase-id>.md>
 
 Re-baseline: F2=<after> (was <before>, delta <signed>)
+
+Recommendations for next run captured in state/next-run.md.
+```
+
+If no fixes and no findings (only `next-run.md` is staged):
+```
+prompt-eval cycle <date>: no improvements; recommendations recorded for next run
+
+From cycle <phase-id>:
+
+No new issues observed; no fixes applied.
+Re-baseline: F2=<after> (was <before>, delta <signed>).
+Recommendations for next run captured in state/next-run.md.
 ```
 
 This is **commit 2 of 2** for the cycle.
@@ -356,6 +382,73 @@ Generate the "NEXT STEPS" bullets by applying these rules in order. Output the b
 - **Stopped on plateau**: stopped reason was `plateau`. → "Tuning plateaued at iter <K>. The current surface may be near its limit; consider tuning a different surface next cycle (e.g. --surface tool_descriptions or user_wrapper)."
 - **Pinned-best applied to production**: pinned-best.json's value differs from production system_prompt.md. → "Pinned best is captured in state but not yet promoted to production. Apply via `cp state/pinned-best.json's system_prompt.value → src/SecondBrain.Llm/Prompts/system_prompt.md` once you've reviewed it, then redeploy the MCP service."
 - **No issues, no fixes, score moved**: no error patterns in logs and tuning improved scores anyway. → "Clean cycle. Re-run with a different surface or extend the iteration cap to push further."
+
+## state/next-run.md — recommendations file format
+
+This is a reference section (not a runtime phase). The file is generated and committed in Phase 6 above; the file's contents are read in Pre-flight Step 5 of the next cycle.
+
+The recommendations file is the single source of truth for "what should the next run start from" — the prior cycle's NEXT STEPS bullets, expressed in a format the pre-flight loader can act on.
+
+Overwrite the file each cycle (do not append). The next-run file always reflects the most recent cycle's output. Carry-forward of unresolved items happens explicitly: if a flagged finding from this cycle is still unresolved, write it as a "carried-forward findings" entry. If a flagged finding was resolved in this cycle, drop it.
+
+Format:
+
+```markdown
+# Next-run recommendations
+
+Generated: <iso-timestamp>
+From cycle: <phase-id>
+
+## Tuning suggestions
+
+These are parameter overrides the next cycle should apply if invoked with no conflicting argument.
+
+- **iteration-cap**: <N> (current default 3; raise/lower based on this cycle's stop reason)
+- **surface**: <id> (current default system_prompt; switch if this cycle plateaued)
+- (omit any line that has no recommendation; absent = no change from default)
+
+## Carried-forward findings
+
+Issues flagged for review by THIS cycle (or earlier cycles, if they remain unresolved). The pre-flight loader prints these as a checklist; it does NOT auto-act on them.
+
+- [<this-cycle phase-id>] <one-line description>. See state/findings/<phase-id>.md.
+- (omit the section if empty)
+
+## Operational tasks
+
+Reminders that don't change the next cycle's parameters but should be addressed before or alongside it.
+
+- <e.g., "Promote state/pinned-best.json's system_prompt.value to src/SecondBrain.Llm/Prompts/system_prompt.md and redeploy the MCP service.">
+- <e.g., "Regenerate test cases — index fingerprint has shifted from <old> to <new>.">
+- (omit the section if empty)
+
+## Notes
+
+Optional free-form context: anything that doesn't fit the structured sections above but the next cycle's operator should know about.
+```
+
+### Generating each section from the cycle's data
+
+| Source signal | Goes into |
+|---|---|
+| Stopped on `iteration_cap` with positive delta > 0.02 | Tuning suggestions: `iteration-cap: <N+2>` |
+| Stopped on `plateau` | Tuning suggestions: `surface: <next surface to try>` |
+| Any items in FLAGGED FOR REVIEW | Carried-forward findings (one entry each) |
+| Pinned-best != production system_prompt.md | Operational tasks: promote-to-production reminder |
+| Index fingerprint at run-time differs from test-cases-v1.json's | Operational tasks: regenerate test cases |
+| Verify regressed | Notes: warn that the previous cycle's fixes need review |
+
+### When to write and commit it
+
+**Write the file in Phase 6**, before staging the improvements commit. Stage `state/next-run.md` alongside the findings doc and any code/test changes, so the file lands in commit 2 of 2 — same commit that surfaces what was found. Single commit; no amend.
+
+If Phase 6 would otherwise be skipped (no fixes AND no findings), still write `state/next-run.md` and commit it as commit 2. The cycle now always produces two commits as long as recommendations exist. Commit message:
+
+```
+prompt-eval cycle <date>: no improvements; recommendations recorded for next run
+```
+
+The next cycle's pre-flight Step 5 reads this file.
 
 ## Failure modes
 
