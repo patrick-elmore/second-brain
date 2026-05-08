@@ -123,39 +123,65 @@ Read the captured log (`/tmp/prompt-eval-cycle-run.log`). Categorize every error
 
 Count occurrences per category across the run.
 
-Write findings to `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/findings/<phase-id>.md`:
+Write findings to `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/findings/<phase-id>.md`. The structure mirrors the final summary so the doc and the printed report tell the same story.
 
 ```markdown
 # Cycle findings: <phase-id>
 
-## Score summary
+Generated: <iso-timestamp>
+Surface tuned: <surface>
+Test set: <id> (<count> cases)
 
-- Baseline F2: <baseline>
-- Best F2:     <best> (<+0.0XX or regressed>)
-- Best iter:   <N>
-- Stopped:     <reason>
+## Tuning result
 
-## Error patterns observed
+| Metric      | Baseline | Best (iter K) | Delta |
+|-------------|----------|---------------|-------|
+| F2          | <pre>    | <best>        | <+/-> |
+| Recall      | <pre>    | <best>        | <+/-> |
+| Precision   | <pre>    | <best>        | <+/-> |
+| Acceptable% | <pre>    | <best>        | <+/-> |
 
-### <Category> (<N> occurrences)
+Per-iteration progression:
+- Iter 0 (baseline): F2=<x>
+- Iter 1: F2=<x> — <rationale>
+- Iter 2: F2=<x> — <rationale>
+- Iter K (★ best): F2=<x> — <rationale>
 
-Sample log line:
+Stopped: <reason>
+
+## Issues observed
+
+### Issue 1: <Category> (<N> occurrences)
+
+**Pattern**: <description>
+
+**Sample log lines**:
 ```
-<one example>
+<one or two examples, kept short>
 ```
 
-Status: <already-fixed | new | recurring>
-Action: <auto-fix-applied | flagged-for-review | none>
+**Impact**: <e.g. "wasted ~2 turns per failure", "crashed entire phase">
 
-(repeat per category)
+**Status**: <new | recurring | already-fixed-prior-cycle>
 
-## Auto-fixes applied
+**Action**: <auto-fix-applied | flagged-for-review | none-needed>
 
-- <one-line description per fix>
+**If auto-fixed**: file `<path>` change `<one-sentence>`, test `<test name>`.
 
-## Flagged for review
+**If flagged**: <why it needs human judgment — what makes it ambiguous, what design decisions are involved>
 
-- <one-line description; why it needs human judgment>
+(repeat per issue)
+
+## Verification
+
+| Metric      | Pre-fix | Post-fix | Delta |
+|-------------|---------|----------|-------|
+| F2          | <x>     | <x>      | <+/-> |
+| Recall      | <x>     | <x>      | <+/-> |
+| Precision   | <x>     | <x>      | <+/-> |
+| Acceptable% | <x>     | <x>      | <+/-> |
+
+Note: per-fix attribution not measured; the verify scores all fixes together.
 ```
 
 ## Phase 4: Apply mechanical fixes
@@ -224,30 +250,112 @@ This is **commit 2 of 2** for the cycle.
 
 ## Reporting
 
-After both commits, print to stdout:
+After both commits, print a structured summary to stdout. The summary must include a per-issue breakdown (what was found, what was done, what changed because of it), not just an aggregate score.
+
+Capture metrics from three sources during the cycle so the summary can be assembled at the end:
+- **Pre-cycle baseline** — from Phase 1's iter-0 score
+- **Tuning best** — from Phase 1's best-iteration score
+- **Post-fix baseline** — from Phase 5's verify run
+
+For each: mean F2, mean precision, mean recall, count of cases with F2 ≥ 0.5, and per-source-type F2 breakdown. The score command's stdout already prints all of these.
+
+Format:
 
 ```
 ═══════════════════════════════════════════════════════════════════
 prompt-eval cycle <phase-id> complete
+═══════════════════════════════════════════════════════════════════
 
-Tuning result:    F2 <baseline>→<best> (delta <signed>) over <N> iterations
-                  Stopped: <reason>
+TUNING RESULT
+  Iteration cap reached at <N>; best iter <K> (stopped: <reason>)
 
-Improvements:     <count auto-fixed>, <count flagged>
-Verify baseline:  F2 <after-fixes> (was <before-fixes>, delta <signed>)
+  Metric        Baseline    Best (iter K)   Delta
+  ──────────────────────────────────────────────
+  F2            <pre>       <best>          <+/->
+  Recall        <pre>       <best>          <+/->
+  Precision     <pre>       <best>          <+/->
+  Acceptable%   <pre>       <best>          <+/->
 
-Commits:
-  <sha1>  prompt-eval cycle <date>: <surface> tuning ...
-  <sha2>  prompt-eval cycle <date>: <N> bug(s) fixed ...
+  Per source type (best iteration):
+    transcript    F2=<x>  (delta <+/->)
+    note          F2=<x>  (delta <+/->)
+    ...
 
-Findings doc:     state/findings/<phase-id>.md
+ISSUES FOUND IN RUN LOGS
+
+  1. <Category> (<N> occurrences)
+     Pattern: <one-line description of what triggers it>
+     Sample:  <one log line excerpt, truncated to ~120 chars>
+     Impact:  <e.g. "wasted ~2 turns per failure", "crashed entire phase">
+     Status:  <auto-fixed | flagged-for-review | recurring (already-fixed)>
+
+  2. ...
+
+  (If zero categories: "No new issues observed; all error patterns already
+   handled by prior fixes.")
+
+FIXES APPLIED
+
+  1. <File>: <one-sentence description of change>
+     Triggered by: issue #<N> above
+     Test added:   <test name>
+
+  2. ...
+
+  (If none: "No auto-fixes applied this cycle.")
+
+FLAGGED FOR REVIEW
+
+  1. <Category>: <one-sentence description, why it needs human judgment>
+     See state/findings/<phase-id>.md for full context.
+
+  2. ...
+
+  (If none: "No items flagged.")
+
+VERIFICATION (re-baseline against the fixed pipeline)
+
+  Metric        Pre-fix     Post-fix        Delta
+  ──────────────────────────────────────────────
+  F2            <pre>       <post>          <+/->
+  Recall        <pre>       <post>          <+/->
+  Precision     <pre>       <post>          <+/->
+  Acceptable%   <pre>       <post>          <+/->
+
+  Per source type:
+    transcript    F2=<pre>→<post>  (delta <+/->)
+    ...
+
+  Note: per-fix attribution is not available — the verify scores all fixes
+  together. If you need per-fix impact, re-run with --score-each-fix
+  (~50-100 extra LLM calls per fix).
+
+COMMITS
+  <sha1>  prompt-eval cycle <date>: <surface> tuning F2 <pre>→<best>
+  <sha2>  prompt-eval cycle <date>: <N> bug(s) fixed, baseline F2 <pre>→<post>
+
+ARTIFACTS
+  Findings:  state/findings/<phase-id>.md
+  Run log:   state/runs/<phase-id>.json
+  Pinned:    state/pinned-best.json (now reflects iter <K> winner)
+
+NEXT STEPS
+  <bulleted recommendations from the rules below>
 ═══════════════════════════════════════════════════════════════════
 ```
 
-Suggest the next action:
-- If best iter > baseline: consider extending iteration-cap to push further
-- If flagged items present: address them next cycle
-- If verify-baseline regressed: investigate before next cycle
+### Next-step rule set
+
+Generate the "NEXT STEPS" bullets by applying these rules in order. Output the bullet for every rule that fires; suppress rules that don't apply.
+
+- **Tuning regressed**: best F2 ≤ baseline F2. → "Tuning produced no improvement. Consider regenerating test cases (corpus may have shifted) or reviewing the proposer's rationale for whether it's stuck on cosmetic edits."
+- **Verify regressed**: post-fix F2 < pre-fix F2 by > 0.01. → "Verification dropped F2 from <pre> to <post>. Investigate which fix caused the regression before next cycle. Improvements were committed but should be reviewed."
+- **Auto-fixes had no measurable effect**: post-fix F2 within ±0.005 of pre-fix. → "Fixes prevented crashes but did not move retrieval scores. They are still worth keeping (system is more robust)."
+- **Flagged items present**: → "<N> finding(s) flagged for human review in state/findings/<phase-id>.md. Resolve before the next cycle."
+- **Tuning hit iteration cap with positive delta**: stopped reason was `iteration_cap` and best F2 > baseline + 0.02. → "Tuning was still improving at the cap. Consider raising --iteration-cap (current: <N>) on the next cycle."
+- **Stopped on plateau**: stopped reason was `plateau`. → "Tuning plateaued at iter <K>. The current surface may be near its limit; consider tuning a different surface next cycle (e.g. --surface tool_descriptions or user_wrapper)."
+- **Pinned-best applied to production**: pinned-best.json's value differs from production system_prompt.md. → "Pinned best is captured in state but not yet promoted to production. Apply via `cp state/pinned-best.json's system_prompt.value → src/SecondBrain.Llm/Prompts/system_prompt.md` once you've reviewed it, then redeploy the MCP service."
+- **No issues, no fixes, score moved**: no error patterns in logs and tuning improved scores anyway. → "Clean cycle. Re-run with a different surface or extend the iteration cap to push further."
 
 ## Failure modes
 
