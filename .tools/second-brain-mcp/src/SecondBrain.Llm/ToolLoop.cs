@@ -50,6 +50,26 @@ internal sealed class ToolLoop
     /// </summary>
     public const int MaxToolTurns = 25;
 
+    /// <summary>
+    /// Per-call cap on the size of a read_file response. Larger files are
+    /// truncated with a marker. ~32 KB encodes to roughly 8K tokens — large
+    /// enough to be useful for a focused read, small enough that even several
+    /// reads within a single ask cannot dominate the 200K context window.
+    /// Surfaced by the prompt-eval harness: tc_014 plus three other cases hit
+    /// the 200K limit even with MaxToolTurns enforced, because each read of a
+    /// large file ate ~25K tokens at a time.
+    /// </summary>
+    public const int MaxReadFileBytes = 32_768;
+
+    /// <summary>
+    /// Soft cap on input tokens reported by the API. Once a single API call
+    /// reports input_tokens above this threshold, the loop forces synthesis
+    /// on the next call (omitting tools) instead of letting the conversation
+    /// keep growing toward the 200K hard limit. Leaves a ~50K-token buffer
+    /// for the synthesis call itself.
+    /// </summary>
+    public const long ContextSoftLimitTokens = 150_000;
+
     public async Task<ToolLoopResult> RunAsync(
         List<MessageParam> messages,
         string model,
@@ -63,6 +83,7 @@ internal sealed class ToolLoop
         var systemPromptText = systemPromptOverride ?? SystemPrompt.Text;
         var toolsCalled = 0;
         var toolTurns = 0;
+        var forceSynthesis = false;
         long inputTokens = 0;
         long outputTokens = 0;
         decimal estimatedCost = 0m;
@@ -85,9 +106,14 @@ internal sealed class ToolLoop
                 Model = model,
                 MaxTokens = 8192,
                 Messages = requestMessages,
-                Tools = tools,
                 System = new MessageCreateParamsSystem(systemBlocks),
             };
+            // Omit Tools entirely when forcing synthesis. The model has no tools
+            // to call, so it must produce a final text response. Cleaner than
+            // injecting a forcing user message (which created two consecutive
+            // user messages and tripped "messages.X: empty content" rejections).
+            if (!forceSynthesis)
+                createParams = createParams with { Tools = tools };
             if (_supportsOutputConfig)
                 createParams = createParams with { OutputConfig = new OutputConfig { Effort = apiEffort } };
 
@@ -148,6 +174,22 @@ internal sealed class ToolLoop
                 toolResults.Add(toolResult);
             }
 
+            // Defensive: StopReason was tool_use but no tool_use blocks were
+            // present (or all were filtered). Adding an empty-content user
+            // message would cause the API to reject the next request with
+            // "messages.X: user messages must have non-empty content". Treat
+            // this as completion using whatever text the response did contain.
+            if (toolResults.Count == 0)
+            {
+                _logger.LogWarning(
+                    "Response had StopReason=ToolUse but no tool_use blocks dispatched; treating as completion.");
+                var texts = response.Content
+                    .Where(b => b.TryPickText(out _))
+                    .Select(b => { b.TryPickText(out var t); return t!.Text; });
+                synthesis = string.Join("\n", texts);
+                break;
+            }
+
             // Append tool results as a user message
             messages.Add(new MessageParam
             {
@@ -155,21 +197,26 @@ internal sealed class ToolLoop
                 Content = toolResults,
             });
 
-            // Enforce the tool-turn cap. If we've hit the limit, append a forcing
-            // message that tells the model to synthesize from what it has rather
-            // than calling more tools. The next loop iteration will produce the
-            // synthesis and exit (StopReason != ToolUse).
             toolTurns++;
+
+            // Two reasons to force synthesis on the next call: tool-turn cap
+            // reached, or context approaching the hard 200K limit. Either way,
+            // we set the flag and let the next iteration omit Tools so the
+            // model produces a final text response.
             if (toolTurns >= MaxToolTurns)
             {
                 _logger.LogWarning(
-                    "Tool loop reached MaxToolTurns={Cap}; forcing final synthesis to prevent context overflow.",
+                    "Tool loop reached MaxToolTurns={Cap}; forcing synthesis on next call.",
                     MaxToolTurns);
-                messages.Add(new MessageParam
-                {
-                    Role = Role.User,
-                    Content = $"Tool budget exhausted ({MaxToolTurns} turns). Synthesize the best answer you can from the information already gathered, citing what you have. Do not call any more tools.",
-                });
+                forceSynthesis = true;
+            }
+            else if (response.Usage.InputTokens >= ContextSoftLimitTokens)
+            {
+                _logger.LogWarning(
+                    "Tool loop input reached {Tokens} tokens (soft limit {Limit}); forcing synthesis on next call to avoid 200K hard cap.",
+                    response.Usage.InputTokens,
+                    ContextSoftLimitTokens);
+                forceSynthesis = true;
             }
         }
 
@@ -379,7 +426,7 @@ internal sealed class ToolLoop
             // shouldn't pollute FilesReferenced.
             filesThisTurn.Add(path);
             _stats?.RecordFileRead(path);
-            return content;
+            return TruncateForToolResult(content);
         }
         catch (FileNotFoundException)
         {
@@ -397,5 +444,16 @@ internal sealed class ToolLoop
         {
             return $"Cannot read {path}: {ex.Message}";
         }
+    }
+
+    private static string TruncateForToolResult(string content)
+    {
+        if (content.Length <= MaxReadFileBytes)
+            return content;
+
+        return content.Substring(0, MaxReadFileBytes) +
+               $"\n\n[truncated: file is {content.Length} bytes; returned first {MaxReadFileBytes}. " +
+               "Run `search` with more specific terms to locate the section you need, " +
+               "or read a different file.]";
     }
 }

@@ -313,6 +313,131 @@ public sealed class ToolLoopTests : IDisposable
         callJson.Should().NotContain("CUSTOM_PROMPT_MARKER");
     }
 
+    // ── read_file truncation ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_ReadFileLargerThanCap_ContentTruncatedWithMarker()
+    {
+        // File larger than the cap: should be truncated, marker appended.
+        var bigContent = new string('x', ToolLoop.MaxReadFileBytes + 5_000);
+        WriteSource("big.md", bigContent);
+        BuildIndex();
+
+        // First call: read_file with big content
+        // Second call: capture the next request to inspect what the model "saw"
+        // Third call: final synthesis
+        var fake = new FakeMessageCreator();
+        var bigPath = Path.Combine(_sourceDir, "big.md");
+        fake.EnqueueToolUse("tu1", "read_file", $$$"""{"path": {{{JsonSerializer.Serialize(bigPath)}}} }""");
+        fake.EnqueueText("Done.");
+
+        var loop = MakeLoop(fake);
+        await loop.RunAsync(UserMessage("Read big."), "haiku", Effort.Low, CancellationToken.None);
+
+        // The second API call's messages include the tool_result; verify it was truncated.
+        var secondCallJson = JsonSerializer.Serialize(fake.Calls[1]);
+        secondCallJson.Should().Contain("[truncated:");
+    }
+
+    [Fact]
+    public async Task RunAsync_ReadFileWithinCap_ContentNotTruncated()
+    {
+        var smallContent = "small content";
+        WriteSource("small.md", smallContent);
+        BuildIndex();
+
+        var fake = new FakeMessageCreator();
+        var smallPath = Path.Combine(_sourceDir, "small.md");
+        fake.EnqueueToolUse("tu1", "read_file", $$$"""{"path": {{{JsonSerializer.Serialize(smallPath)}}} }""");
+        fake.EnqueueText("Done.");
+
+        var loop = MakeLoop(fake);
+        await loop.RunAsync(UserMessage("Read small."), "haiku", Effort.Low, CancellationToken.None);
+
+        var secondCallJson = JsonSerializer.Serialize(fake.Calls[1]);
+        secondCallJson.Should().NotContain("[truncated:");
+    }
+
+    // ── context-overflow soft limit ───────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_ContextSoftLimitReached_NextCallOmitsTools()
+    {
+        WriteSource("a.md", "alpha");
+        BuildIndex();
+
+        // First tool-use response reports input_tokens above the soft limit.
+        // Loop should then force synthesis on the next call by omitting Tools.
+        var fake = new FakeMessageCreator();
+        fake.EnqueueToolUse("tu1", "search", """{"queries":["alpha"]}""",
+            inputTokens: (int)ToolLoop.ContextSoftLimitTokens + 1_000);
+        fake.EnqueueText("Final answer after forced synthesis.");
+
+        var loop = MakeLoop(fake);
+        var result = await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
+
+        result.Synthesis.Should().Be("Final answer after forced synthesis.");
+        // Second call must have no tools available (forced synthesis).
+        fake.Calls[1].Tools.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunAsync_ContextBelowSoftLimit_NextCallStillIncludesTools()
+    {
+        WriteSource("a.md", "alpha");
+        BuildIndex();
+
+        var fake = new FakeMessageCreator();
+        // Well below the soft limit
+        fake.EnqueueToolUse("tu1", "search", """{"queries":["alpha"]}""", inputTokens: 1_000);
+        fake.EnqueueText("Done.");
+
+        var loop = MakeLoop(fake);
+        await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
+
+        // Both calls should include tools — no force triggered.
+        fake.Calls[0].Tools.Should().NotBeNull();
+        fake.Calls[1].Tools.Should().NotBeNull();
+    }
+
+    // ── empty tool_use guard ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_StopReasonToolUseButNoToolUseBlocks_TreatedAsCompletion()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        // Malformed response: stop_reason=tool_use but content has only text.
+        // The loop must NOT add an empty user message (which would later cause
+        // "messages.X: user messages must have non-empty content").
+        fake.EnqueueResponse("""
+            {
+              "id": "msg_test",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-haiku-4-5",
+              "stop_reason": "tool_use",
+              "stop_sequence": null,
+              "content": [{"type": "text", "text": "I am not actually using a tool."}],
+              "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": null,
+                "cache_read_input_tokens": null
+              }
+            }
+            """);
+        // No second response needed — the loop should break out after the empty
+        // tool_use guard fires.
+
+        var loop = MakeLoop(fake);
+        var result = await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
+
+        result.Synthesis.Should().Be("I am not actually using a tool.");
+        // Only one API call should have been made — no follow-up triggered.
+        fake.Calls.Should().HaveCount(1);
+    }
+
     [Fact]
     public async Task RunAsync_FilesReferenced_DeduplicatedCaseInsensitively()
     {

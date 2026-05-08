@@ -23,8 +23,8 @@ internal sealed class FakeMessageCreator : IMessageCreator
         => EnqueueResponse(TextMessageJson(text, inputTokens, outputTokens));
 
     /// <summary>Enqueues a response with a single tool_use block.</summary>
-    public void EnqueueToolUse(string toolId, string toolName, string inputJson)
-        => EnqueueResponse(ToolUseMessageJson(toolId, toolName, inputJson));
+    public void EnqueueToolUse(string toolId, string toolName, string inputJson, int inputTokens = 100, int outputTokens = 50)
+        => EnqueueResponse(ToolUseMessageJson(toolId, toolName, inputJson, inputTokens, outputTokens));
 
     public Task<Message> CreateAsync(MessageCreateParams createParams, CancellationToken ct)
     {
@@ -55,7 +55,7 @@ internal sealed class FakeMessageCreator : IMessageCreator
         }
         """;
 
-    public static string ToolUseMessageJson(string toolId, string toolName, string inputJson) => $$"""
+    public static string ToolUseMessageJson(string toolId, string toolName, string inputJson, int inputTokens = 100, int outputTokens = 50) => $$"""
         {
           "id": "msg_test",
           "type": "message",
@@ -70,8 +70,8 @@ internal sealed class FakeMessageCreator : IMessageCreator
             "input": {{inputJson}}
           }],
           "usage": {
-            "input_tokens": 100,
-            "output_tokens": 50,
+            "input_tokens": {{inputTokens}},
+            "output_tokens": {{outputTokens}},
             "cache_creation_input_tokens": null,
             "cache_read_input_tokens": null
           }
