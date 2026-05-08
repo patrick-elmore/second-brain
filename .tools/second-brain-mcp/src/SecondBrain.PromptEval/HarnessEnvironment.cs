@@ -67,6 +67,11 @@ public sealed class HarnessEnvironment
                 $"API key not set. Set {apiKeyEnv} or use Vertex (CLAUDE_CODE_USE_VERTEX=1).");
 
         var rawClient = ClaudeSessionFactory.BuildClient(apiKey, string.IsNullOrEmpty(vertexBaseUrl) ? null : vertexBaseUrl);
+        // Bump HttpClient timeout for the harness — proposer calls to Sonnet with large
+        // inputs routinely exceed the default 100s HttpClient timeout. The Vertex client
+        // uses a custom HttpClient so we set Timeout on the underlying instance.
+        if (rawClient.HttpClient != null)
+            rawClient.HttpClient.Timeout = TimeSpan.FromMinutes(10);
         var client = new AnthropicMessageCreator(rawClient);
 
         var searchEngine = new SearchEngine(ftsDbPath);

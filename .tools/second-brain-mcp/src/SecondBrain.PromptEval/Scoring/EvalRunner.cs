@@ -46,7 +46,31 @@ public sealed class EvalRunner
                 continue;
             }
 
-            var result = await RunCaseAsync(tc, overrides, ct);
+            CaseResult result;
+            try
+            {
+                result = await RunCaseAsync(tc, overrides, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // user-initiated cancel
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[{Id}] FAILED ({Type}: {Msg}) — recording as F2=0", tc.Id, ex.GetType().Name, ex.Message);
+                result = new CaseResult
+                {
+                    TestCaseId = tc.Id,
+                    Query = tc.Query,
+                    ExpectedPaths = tc.TargetPaths,
+                    ActualPaths = [],
+                    Synthesis = $"[ERROR: {ex.GetType().Name}: {ex.Message}]",
+                    Score = new CaseScore(0, 0, 0, 0, tc.TargetPaths.Count, 0),
+                    ToolsCalled = 0,
+                    CostUsd = 0m,
+                    DurationMs = "0",
+                };
+            }
             _cache.Put(variantId, tc.Id, result);
             results.Add(result);
 

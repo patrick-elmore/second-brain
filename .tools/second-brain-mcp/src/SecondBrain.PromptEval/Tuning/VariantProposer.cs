@@ -42,7 +42,7 @@ public sealed class VariantProposer
         var createParams = new MessageCreateParams
         {
             Model = _env.EscalationModel, // sonnet for proposals — better at structural reasoning
-            MaxTokens = 4096,
+            MaxTokens = 16_000,
             System = new MessageCreateParamsSystem(systemBlocks),
             Messages = [new MessageParam { Role = Role.User, Content = userMsg }],
         };
@@ -73,7 +73,7 @@ public sealed class VariantProposer
         };
 
     private const string SystemPromptProposerInstructions = """
-        You are tuning the system prompt for a personal-knowledge-retrieval LLM agent.
+        You are tuning the system prompt template for a personal-knowledge-retrieval LLM agent.
         The agent receives a plain-language user question and must use two tools to answer:
           - search(queries[], filters): full-text search against an FTS5 index of personal docs
           - read_file(path): read full text of a specific file
@@ -82,21 +82,25 @@ public sealed class VariantProposer
         a known "expected" set of target files for each query; recall on that set is what we're
         optimizing (with some weight on precision so it doesn't over-fetch).
 
+        IMPORTANT: The template contains a literal `{ALIASES}` marker. This is substituted at
+        runtime with hundreds of name/project aliases. PRESERVE the `{ALIASES}` marker in your
+        output verbatim — do not expand it, replace it, or remove it. Treat it as a black box.
+
         You will be given:
-          - The CURRENT system prompt being tested
-          - The original PRODUCTION DEFAULT system prompt (as an anchor — don't drift far without reason)
+          - The CURRENT template being tested (with `{ALIASES}` marker)
+          - The original PRODUCTION DEFAULT template (as an anchor — don't drift far without reason)
           - A short HISTORY of recent variants and their scores
           - The WORST-PERFORMING test cases under the current value (query, expected files,
             actual files, synthesis text)
 
-        Your job: propose ONE revised system prompt. Output the full revised prompt verbatim,
-        then on a new line `RATIONALE:` followed by 1-3 sentences explaining what you changed
-        and why you think it will improve recall on the failing cases without regressing the
-        passing ones.
+        Your job: propose ONE revised template. Output the full revised template verbatim,
+        keeping the `{ALIASES}` marker intact. Then on a new line write `RATIONALE:` followed
+        by 1-3 sentences explaining what you changed and why you think it will improve recall
+        on the failing cases without regressing the passing ones.
 
         Output format:
           ===PROMPT START===
-          <revised prompt verbatim>
+          <revised template verbatim, including {ALIASES} marker>
           ===PROMPT END===
           RATIONALE: <one to three sentences>
         """;

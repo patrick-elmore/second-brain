@@ -99,8 +99,22 @@ public sealed class PhaseRunner
             else
             {
                 _logger.LogInformation("Iter {N}: requesting proposal from {Model}", iter, _env.EscalationModel);
-                proposal = await proposer.ProposeAsync(
-                    config.Surface, currentValue, productionDefault, iterations, failures, ct);
+                try
+                {
+                    proposal = await proposer.ProposeAsync(
+                        config.Surface, currentValue, productionDefault, iterations, failures, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Iter {N}: proposer failed, skipping iteration", iter);
+                    noImprovementStreak++;
+                    if (noImprovementStreak >= config.PlateauThreshold)
+                    {
+                        stoppedReason = "proposer_failures";
+                        break;
+                    }
+                    continue;
+                }
             }
 
             var variantId = ScoreCache.ComputeVariantId(config.Surface, proposal.Value);
@@ -166,9 +180,11 @@ public sealed class PhaseRunner
     private (string productionDefault, Func<string, AskOverrides> makeOverrides)
         ResolveSurface(string surface) => surface switch
         {
+            // Tune the template (with {ALIASES} marker) — aliases are substituted at score
+            // time so the proposer doesn't have to reproduce hundreds of lines of names/projects.
             "system_prompt" => (
-                SystemPrompt.Text,
-                v => new AskOverrides(SystemPromptOverride: v)),
+                SystemPrompt.Template,
+                v => new AskOverrides(SystemPromptOverride: SystemPrompt.SubstituteAliases(v))),
             "user_wrapper" => (
                 "{query}", // identity = production default
                 v => new AskOverrides(UserMessageWrapperTemplate: v)),

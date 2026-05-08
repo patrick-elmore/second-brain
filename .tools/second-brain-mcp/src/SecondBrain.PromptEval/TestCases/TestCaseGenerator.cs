@@ -57,13 +57,15 @@ public sealed class TestCaseGenerator
         string? QueryGenPromptOverride = null);
 
     public static GenerationConfig DefaultConfig() => new(
+        // Calibrated to actual index distribution: ~4800 untyped docs (NULL),
+        // ~150 transcripts, ~60 notes, ~25 backlog items. Other types have <5 docs each
+        // so they're not worth stratifying on.
         CountPerSourceType: new Dictionary<string, int>
         {
-            ["transcript"] = 3,
-            ["1on1"] = 3,
-            ["planning"] = 3,
-            ["note"] = 3,
-            ["standup"] = 3,
+            ["transcript"] = 5,
+            ["note"] = 4,
+            [""] = 4, // NULL source_type bucket — vast majority of the corpus
+            ["product backlog item"] = 2,
         },
         SetId: "tc-v1");
 
@@ -111,13 +113,14 @@ public sealed class TestCaseGenerator
                 continue;
             }
 
+            var displaySourceType = string.IsNullOrEmpty(doc.SourceType) ? "unknown" : doc.SourceType;
             cases.Add(new TestCase
             {
                 Id = $"tc_{caseIndex:D3}",
                 TargetPaths = [doc.AbsolutePath],
                 Query = query.Trim(),
-                SourceType = doc.SourceType,
-                Rationale = $"Doc is {doc.SourceType} at {doc.RelativePath}",
+                SourceType = displaySourceType,
+                Rationale = $"Doc is {displaySourceType} at {doc.RelativePath}",
                 GeneratedAt = DateTimeOffset.UtcNow.ToString("o"),
             });
 
@@ -147,6 +150,7 @@ public sealed class TestCaseGenerator
     {
         // Load all candidate docs (with summary set, meaning they survived the summarizer
         // pass — those are the ones with substantive content) grouped by source_type.
+        // Empty-string key in countPerType matches NULL source_type rows.
         var byType = new Dictionary<string, List<DocRecord>>();
 
         var connStr = new SqliteConnectionStringBuilder
@@ -161,8 +165,7 @@ public sealed class TestCaseGenerator
         cmd.CommandText = """
             SELECT id, absolute_path, relative_path, source_type, size_bytes
               FROM files
-             WHERE source_type IS NOT NULL
-               AND summary IS NOT NULL
+             WHERE summary IS NOT NULL
                AND length(summary) > 0
                AND size_bytes >= @minSize
             """;
@@ -171,7 +174,7 @@ public sealed class TestCaseGenerator
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            var sourceType = reader.GetString(3);
+            var sourceType = reader.IsDBNull(3) ? "" : reader.GetString(3);
             if (!countPerType.ContainsKey(sourceType))
                 continue;
 

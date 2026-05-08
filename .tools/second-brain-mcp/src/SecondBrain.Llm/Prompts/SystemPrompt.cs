@@ -12,16 +12,19 @@ public static class SystemPrompt
 {
     private const string PromptResource = "SecondBrain.Llm.Prompts.system_prompt.md";
     private const string AliasResource = "SecondBrain.Llm.Prompts.aliases.md";
-    private const string AliasMarker = "{ALIASES}";
+    public const string AliasMarker = "{ALIASES}";
 
-    public static string Text { get; } = BuildText();
+    /// <summary>The raw template with {ALIASES} unsubstituted. Tunable surface.</summary>
+    public static string Template { get; } = LoadEmbeddedResource(PromptResource);
 
-    private static string BuildText()
-    {
-        var prompt = LoadEmbeddedResource(PromptResource);
-        var aliases = LoadEmbeddedResource(AliasResource);
-        return prompt.Replace(AliasMarker, aliases);
-    }
+    /// <summary>The aliases content that gets substituted at runtime.</summary>
+    public static string Aliases { get; } = LoadEmbeddedResource(AliasResource);
+
+    /// <summary>The fully-resolved system prompt with aliases substituted.</summary>
+    public static string Text { get; } = SubstituteAliases(Template);
+
+    /// <summary>Apply alias substitution to an arbitrary template string.</summary>
+    public static string SubstituteAliases(string template) => template.Replace(AliasMarker, Aliases);
 
     private static string LoadEmbeddedResource(string name)
     {
