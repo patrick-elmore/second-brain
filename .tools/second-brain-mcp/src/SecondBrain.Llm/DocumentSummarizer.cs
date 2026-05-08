@@ -23,7 +23,6 @@ public sealed class DocumentSummarizer
     private readonly IMessageCreator _client;
     private readonly ILogger _logger;
     private readonly IStatsRecorder? _stats;
-    private readonly bool _supportsOutputConfig;
 
     // Regex to extract SUMMARY blocks: =====BEGIN:SUMMARY:N=====\n...\n=====END:SUMMARY:N=====
     private static readonly Regex SummaryPattern = new(
@@ -35,8 +34,6 @@ public sealed class DocumentSummarizer
         _client = client;
         _logger = logger ?? NullLogger.Instance;
         _stats = stats;
-        _supportsOutputConfig = !string.Equals(
-            Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_VERTEX"), "1", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -101,8 +98,8 @@ public sealed class DocumentSummarizer
             ],
         };
 
-        if (_supportsOutputConfig)
-            createParams = createParams with { OutputConfig = new OutputConfig { Effort = Effort.Low } };
+        // Summaries are short; no thinking needed.
+        // (Effort.Low maps to no Thinking via EffortConfig, so omit entirely.)
 
         string responseText;
         try

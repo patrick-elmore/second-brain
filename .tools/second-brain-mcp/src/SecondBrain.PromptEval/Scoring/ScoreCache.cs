@@ -35,10 +35,12 @@ public sealed class ScoreCache
 
     public int Count => _cache.Count;
 
-    public static string ComputeVariantId(string surface, string value)
+    public static string ComputeVariantId(string surface, string value, string effort = "low")
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(surface + "|" + value));
-        return surface + "_" + Convert.ToHexString(bytes)[..12].ToLowerInvariant();
+        // Effort is part of the cache key because the same prompt at different
+        // effort tiers produces different scores once Thinking is wired through.
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(surface + "|" + value + "|" + effort));
+        return surface + "_" + Convert.ToHexString(bytes)[..12].ToLowerInvariant() + "_" + effort;
     }
 
     private static string MakeKey(string variantId, string testCaseId) => $"{variantId}::{testCaseId}";

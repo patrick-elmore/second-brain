@@ -27,7 +27,6 @@ internal sealed class ToolLoop
     private readonly FileReader _fileReader;
     private readonly ILogger _logger;
     private readonly IStatsRecorder? _stats;
-    private readonly bool _supportsOutputConfig;
 
     public ToolLoop(IMessageCreator client, SearchEngine searchEngine, FileReader fileReader, ILogger? logger = null, IStatsRecorder? stats = null)
     {
@@ -36,9 +35,6 @@ internal sealed class ToolLoop
         _fileReader = fileReader;
         _logger = logger ?? NullLogger.Instance;
         _stats = stats;
-        // Vertex AI rejects output_config; only the direct Anthropic API supports it
-        _supportsOutputConfig = !string.Equals(
-            Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_VERTEX"), "1", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -101,10 +97,15 @@ internal sealed class ToolLoop
                 new() { Text = systemPromptText, CacheControl = new CacheControlEphemeral() },
             };
 
+            // Effort tier maps to Thinking budget + scaled MaxTokens. The earlier
+            // OutputConfig.Effort path was silently dropped on Vertex; Thinking is
+            // a standard API field and works on both Vertex and direct API.
+            var (thinking, maxTokens) = EffortConfig.Resolve(apiEffort);
+
             var createParams = new MessageCreateParams
             {
                 Model = model,
-                MaxTokens = 8192,
+                MaxTokens = maxTokens,
                 Messages = requestMessages,
                 System = new MessageCreateParamsSystem(systemBlocks),
             };
@@ -114,8 +115,8 @@ internal sealed class ToolLoop
             // user messages and tripped "messages.X: empty content" rejections).
             if (!forceSynthesis)
                 createParams = createParams with { Tools = tools };
-            if (_supportsOutputConfig)
-                createParams = createParams with { OutputConfig = new OutputConfig { Effort = apiEffort } };
+            if (thinking != null)
+                createParams = createParams with { Thinking = thinking };
 
             var response = await _client.CreateAsync(createParams, ct);
 

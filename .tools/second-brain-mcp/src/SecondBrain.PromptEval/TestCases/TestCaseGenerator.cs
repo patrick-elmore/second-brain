@@ -234,10 +234,8 @@ public sealed class TestCaseGenerator
             ],
         };
 
-        var supportsOutputConfig = !string.Equals(
-            Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_VERTEX"), "1", StringComparison.Ordinal);
-        if (supportsOutputConfig)
-            createParams = createParams with { OutputConfig = new OutputConfig { Effort = Effort.Low } };
+        // Test-case query generation is short-form text; no thinking needed.
+        // (Effort.Low maps to no Thinking via EffortConfig, so omit entirely.)
 
         var response = await _env.Client.CreateAsync(createParams, ct);
 

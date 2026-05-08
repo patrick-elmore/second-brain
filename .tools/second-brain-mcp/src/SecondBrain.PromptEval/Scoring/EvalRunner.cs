@@ -28,6 +28,7 @@ public sealed class EvalRunner
         TestCaseSet set,
         AskOverrides overrides,
         IReadOnlyList<TestCase>? subset = null,
+        string effort = "low",
         CancellationToken ct = default)
     {
         var cases = subset ?? set.Cases;
@@ -49,7 +50,7 @@ public sealed class EvalRunner
             CaseResult result;
             try
             {
-                result = await RunCaseAsync(tc, overrides, ct);
+                result = await RunCaseAsync(tc, overrides, effort, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -90,7 +91,7 @@ public sealed class EvalRunner
         };
     }
 
-    private async Task<CaseResult> RunCaseAsync(TestCase tc, AskOverrides overrides, CancellationToken ct)
+    private async Task<CaseResult> RunCaseAsync(TestCase tc, AskOverrides overrides, string effort, CancellationToken ct)
     {
         // Fresh session per case — no context bleed from prior cases.
         // No state persistence — these sessions are throwaway.
@@ -109,7 +110,7 @@ public sealed class EvalRunner
             logger: _env.LoggerFactory.CreateLogger<ClaudeSession>());
 
         var sw = Stopwatch.StartNew();
-        var ask = await session.AskAsync(tc.Query, null, "low", ct, overrides);
+        var ask = await session.AskAsync(tc.Query, null, effort, ct, overrides);
         sw.Stop();
 
         var score = Scorer.Score(tc.TargetPaths, ask.FilesReferenced);

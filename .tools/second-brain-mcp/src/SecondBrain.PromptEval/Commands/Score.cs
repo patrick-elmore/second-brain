@@ -14,6 +14,7 @@ public static class Score
         string? variantPath = null; // path to a file holding the variant value (e.g. a .md prompt file)
         string variantLabel = "baseline"; // human label for output
         string? outputPath = null;
+        string effort = "low";
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -24,7 +25,15 @@ public static class Score
                 case "--variant" when i + 1 < args.Length: variantPath = args[++i]; break;
                 case "--label" when i + 1 < args.Length: variantLabel = args[++i]; break;
                 case "--output" when i + 1 < args.Length: outputPath = args[++i]; break;
+                case "--effort" when i + 1 < args.Length: effort = args[++i].ToLowerInvariant(); break;
             }
+        }
+
+        var validEfforts = new[] { "low", "medium", "high" };
+        if (!validEfforts.Contains(effort))
+        {
+            Console.Error.WriteLine($"Invalid --effort value: '{effort}'. Must be one of: {string.Join(", ", validEfforts)}");
+            return 1;
         }
 
         var resolvedTestCases = Path.IsPathRooted(testCasesPath)
@@ -60,14 +69,15 @@ public static class Score
             };
         }
 
-        var variantId = ScoreCache.ComputeVariantId(surface, variantValue);
+        var variantId = ScoreCache.ComputeVariantId(surface, variantValue, effort);
         var cache = new ScoreCache(Path.Combine(env.StateDir, "score-cache.json"));
         var runner = new EvalRunner(env, cache);
 
         Console.WriteLine($"Variant: {variantLabel} ({variantId})");
+        Console.WriteLine($"Effort:  {effort}");
         Console.WriteLine();
 
-        var result = await runner.EvaluateAsync(variantId, set, overrides ?? new AskOverrides());
+        var result = await runner.EvaluateAsync(variantId, set, overrides ?? new AskOverrides(), effort: effort);
 
         Console.WriteLine();
         Console.WriteLine("=== Aggregate ===");

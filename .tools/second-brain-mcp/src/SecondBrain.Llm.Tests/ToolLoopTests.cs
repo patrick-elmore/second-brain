@@ -313,6 +313,52 @@ public sealed class ToolLoopTests : IDisposable
         callJson.Should().NotContain("CUSTOM_PROMPT_MARKER");
     }
 
+    // ── effort tier → Thinking config ────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_LowEffort_ThinkingOmittedAndDefaultMaxTokens()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var loop = MakeLoop(fake);
+
+        await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
+
+        fake.Calls[0].Thinking.Should().BeNull();
+        fake.Calls[0].MaxTokens.Should().Be(8192);
+    }
+
+    [Fact]
+    public async Task RunAsync_MediumEffort_ThinkingEnabledWith4096Budget()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var loop = MakeLoop(fake);
+
+        await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Medium, CancellationToken.None);
+
+        var thinkingJson = JsonSerializer.Serialize(fake.Calls[0].Thinking);
+        thinkingJson.Should().Contain("\"budget_tokens\":4096");
+        fake.Calls[0].MaxTokens.Should().Be(8192 + 4096);
+    }
+
+    [Fact]
+    public async Task RunAsync_HighEffort_ThinkingEnabledWith16384BudgetAndScaledMaxTokens()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var loop = MakeLoop(fake);
+
+        await loop.RunAsync(UserMessage("Q"), "haiku", Effort.High, CancellationToken.None);
+
+        var thinkingJson = JsonSerializer.Serialize(fake.Calls[0].Thinking);
+        thinkingJson.Should().Contain("\"budget_tokens\":16384");
+        fake.Calls[0].MaxTokens.Should().Be(8192 + 16384);
+    }
+
     // ── read_file truncation ──────────────────────────────────────────────────
 
     [Fact]

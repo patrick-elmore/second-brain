@@ -1,6 +1,7 @@
 using System.Text;
 using Anthropic.Models.Messages;
 using Microsoft.Extensions.Logging;
+using SecondBrain.Llm;
 using SecondBrain.PromptEval.Scoring;
 
 namespace SecondBrain.PromptEval.Tuning;
@@ -39,18 +40,20 @@ public sealed class VariantProposer
             new() { Text = systemPrompt, CacheControl = new CacheControlEphemeral() },
         };
 
+        // Medium-effort thinking helps the proposer with structural rewriting.
+        // EffortConfig handles Vertex vs direct-API uniformly via the Thinking field.
+        var (thinking, maxTokens) = EffortConfig.Resolve(Effort.Medium, baseOutputTokens: 16_000);
+
         var createParams = new MessageCreateParams
         {
             Model = _env.EscalationModel, // sonnet for proposals — better at structural reasoning
-            MaxTokens = 16_000,
+            MaxTokens = maxTokens,
             System = new MessageCreateParamsSystem(systemBlocks),
             Messages = [new MessageParam { Role = Role.User, Content = userMsg }],
         };
 
-        var supportsOutputConfig = !string.Equals(
-            Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_VERTEX"), "1", StringComparison.Ordinal);
-        if (supportsOutputConfig)
-            createParams = createParams with { OutputConfig = new OutputConfig { Effort = Effort.Medium } };
+        if (thinking != null)
+            createParams = createParams with { Thinking = thinking };
 
         var response = await _env.Client.CreateAsync(createParams, ct);
 
