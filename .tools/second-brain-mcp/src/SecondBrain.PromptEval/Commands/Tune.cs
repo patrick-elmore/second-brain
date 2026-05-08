@@ -26,6 +26,18 @@ public static class Tune
             }
         }
 
+        // Fail fast on unsupported surface — keep this list in sync with
+        // PhaseRunner.ResolveSurface. Without this, an invalid surface would
+        // sail through baseline scoring (which uses the production prompt
+        // regardless of surface) and only crash on iter 1's proposer call.
+        var supportedSurfaces = new[] { "system_prompt", "user_wrapper" };
+        if (!supportedSurfaces.Contains(surface))
+        {
+            Console.Error.WriteLine($"Unsupported surface: '{surface}'.");
+            Console.Error.WriteLine($"Supported: {string.Join(", ", supportedSurfaces)}");
+            return 1;
+        }
+
         var resolvedTestCases = Path.IsPathRooted(testCasesPath)
             ? testCasesPath
             : Path.Combine(env.StateDir, testCasesPath);
