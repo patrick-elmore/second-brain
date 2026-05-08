@@ -126,12 +126,29 @@ Read the captured log (`/tmp/prompt-eval-cycle-run.log`). Categorize every error
 | `SqliteException ... no such column: \w+` | FTS5 syntax error in search query | Already handled; flag if it recurs frequently |
 | `FileNotFoundException ... read_file` | Hallucinated path | Already returns guidance; flag if recurring |
 | `UnauthorizedAccessException ... outside allowed roots` | Same as above | Already handled |
-| `prompt is too long: .* tokens > 200000` | Tool loop spiral | Already capped; if it still happens lower MaxToolTurns |
+| `prompt is too long: .* tokens > 200000` | Tool loop context overflow | **Auto-fix (hard blocker)**: see recipe in Phase 4. Combined fix: read_file truncation + token-budget guard |
+| `messages\.\d+: user messages must have non-empty content` | Empty/malformed user message | **Auto-fix (hard blocker)**: see recipe in Phase 4. Defensive guard for empty tool-results + omit-Tools forced synthesis |
 | `TaskCanceledException ... HttpClient.Timeout` | Network timeout | Bump timeout; flag if from non-eval client |
-| Any unhandled exception in `RunCaseAsync` | New unknown failure mode | Always flag |
+| Any unhandled exception in `RunCaseAsync` | New unknown failure mode | **Auto-fix if hard blocker** (see "Hard-blocker policy" below); otherwise flag |
 | `proposer failed` | Proposer issue (parse error, timeout, etc.) | Inspect; may need to raise MaxTokens or revise instructions |
 
 Count occurrences per category across the run.
+
+### Hard-blocker policy
+
+A "hard-blocking" issue is one that:
+- Causes one or more test cases to score F2=0 every cycle (zero-score floor, not a low-score), OR
+- Crashes the eval phase (any unhandled exception escaping `EvalRunner.EvaluateAsync`), OR
+- Is rejected by the upstream API in a way the harness cannot work around (e.g., the request is malformed or exceeds a hard limit)
+
+**Hard blockers MUST be fixed in the cycle that surfaces them, even if the fix involves design judgment.** Do not flag-and-wait. The cycles cost LLM calls; running a "dead cycle" that re-discovers the same blocker every time is waste. If multiple plausible fixes exist:
+
+1. Pick the one with the smallest blast radius (a defensive guard before a refactor, a per-call cap before a global limit).
+2. Document the choice and the rejected alternatives in the findings doc.
+3. Apply it. Add a unit test. Verify the build + tests pass.
+4. If the chosen fix breaks the build or tests, revert and flag — at that point the cycle has done its job and human design judgment is needed before retrying.
+
+**Soft issues** (warnings, edge cases, style preferences, contested design decisions on non-blockers) still flag-for-review. The flag-and-wait pattern is the right behavior for "we should think about this" — wrong for "this is breaking 4 cases every cycle."
 
 Write findings to `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/findings/<phase-id>.md`. The structure mirrors the final summary so the doc and the printed report tell the same story.
 
@@ -194,26 +211,58 @@ Stopped: <reason>
 Note: per-fix attribution not measured; the verify scores all fixes together.
 ```
 
-## Phase 4: Apply mechanical fixes
+## Phase 4: Apply fixes
 
-For each category marked **auto-fix-applied**:
+Two paths:
 
-1. Apply the code change (see "Auto-fix recipes" below).
+**Hard-blocking issues** (see Hard-blocker policy in Phase 3): apply a fix in this cycle, even if there's no pre-canned recipe. Pick the smallest-blast-radius option. Document the choice and rejected alternatives in the findings doc. Add a unit test. Build + tests must pass; if not, revert and flag.
+
+**Recipe-driven issues** (categories with entries in "Auto-fix recipes" below): apply the documented change.
+
+**Soft / contested issues**: flag-for-review — do nothing to code. The findings doc captures them for human judgment.
+
+For every applied fix:
+
+1. Apply the code change.
 2. Add a unit test that exercises the fixed path.
 3. Run the build + test suite. Both must succeed; if not, revert and flag instead.
 
-For each category marked **flagged-for-review**: do nothing to code. The findings doc captures it.
-
-If no auto-fixes are applicable this cycle, skip to Phase 5 with a "no improvements this cycle" note.
+If no fixes are applicable this cycle, skip to Phase 5 with a "no improvements this cycle" note.
 
 ### Auto-fix recipes (extend as new categories emerge)
 
-The set of recipes below is intentionally small and well-defined. If a category isn't in this list, flag it for review rather than improvising.
+Recipes are concrete change instructions for known patterns. For hard blockers without a recipe, see "Hard-blocker policy" in Phase 3 — pick the smallest-blast-radius fix, document the choice, apply it.
 
 **Known categories with recipes:**
-- *(none currently — the three known categories from the first cycle are already fixed in commits aa22828 and 7f7f807. New categories should be added to this section as they're discovered and fixed.)*
 
-**Adding a new recipe**: when a flagged-for-review category gets manually fixed, append the recipe here so the next cycle can auto-fix it. Document: pattern, file to change, change to make, test to add.
+- **`prompt is too long: .* tokens > 200000`** (tool loop context overflow)
+  - Already-applied guards in `src/SecondBrain.Llm/ToolLoop.cs`:
+    - `MaxToolTurns = 25` cap with omit-Tools forced synthesis on overflow
+    - `MaxReadFileBytes = 32_768` truncation in `RunReadFile` with marker
+    - `ContextSoftLimitTokens = 150_000` soft limit; when exceeded the next API call omits Tools
+  - If this pattern still recurs frequently after the existing guards: lower `MaxReadFileBytes` first (most targeted), then `ContextSoftLimitTokens`, then `MaxToolTurns` last (broadest reduction).
+  - Tests: `RunAsync_ReadFileLargerThanCap_*`, `RunAsync_ContextSoftLimitReached_*`, `RunAsync_ToolLoopHitsCap_*`.
+  - Fixed in commits 7f7f807 and a7c7fdc.
+
+- **`messages\.\d+: user messages must have non-empty content`** (empty/malformed user message)
+  - Already-applied guards in `src/SecondBrain.Llm/ToolLoop.cs`:
+    - Forced synthesis omits Tools instead of injecting a second user message (avoids consecutive same-role messages that the API may flag as empty).
+    - Defensive guard: if `StopReason == ToolUse` but no `tool_use` blocks were dispatched, treat as completion and extract any text — never add an empty user message.
+  - If this pattern recurs after the guards: dump the message list at the moment of failure (see `_logger.LogError` in `DispatchToolAsync` for the existing pattern) to identify which message is empty and why.
+  - Tests: `RunAsync_StopReasonToolUseButNoToolUseBlocks_*`.
+  - Fixed in commit a7c7fdc.
+
+- **`SqliteException`** (FTS5 syntax error in search query)
+  - `SearchEngine.Search` catches `SqliteException` and returns empty hits.
+  - Tests in `SecondBrain.Index.Tests`.
+  - Fixed in commit 7f7f807.
+
+- **`FileNotFoundException` / `UnauthorizedAccessException` in read_file**
+  - `ToolLoop.RunReadFile` catches both and returns actionable guidance ("use only absolute_path values returned by `search`; do not invent paths"). Failed reads do not record into `FilesReferenced`.
+  - Tests: `RunAsync_ReadFileNotFound_*`, `RunAsync_ReadFileOutsideAllowedRoots_*`.
+  - Fixed in commit 7f7f807.
+
+**Adding a new recipe**: when a hard blocker is auto-fixed in a cycle, append the recipe here so the pattern + fix + test are documented for future maintenance. Document: pattern, file to change, change to make, test to add, commit.
 
 ## Phase 5: Verify
 
