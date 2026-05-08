@@ -29,7 +29,7 @@ Two or three commits per cycle: one for results, optionally one for prompt promo
 
 - Surface: `system_prompt`
 - Iteration cap: 3 (per current plan; raise via `--iteration-cap N`)
-- Test cases file: `state/test-cases-v1.json` (must exist; run `generate-test-cases` once first)
+- Test cases file: `state/test-cases-v2.json` (48 cases; default since 2026-05-08). Falls back to `test-cases-v1.json` (15 cases) if v2 missing. Run `generate-test-cases --output test-cases-vN.json --set-id tc-vN --count 12` to mint a new version when the corpus shifts.
 
 ## Pre-flight checks
 
@@ -37,11 +37,13 @@ Before doing anything that costs LLM calls or touches git:
 
 1. **Working tree must be clean.** Run `git status -s` from the repo root. If anything is modified or untracked (other than expected eval state), stop and report. The cycle creates two or three sequential commits; a dirty tree confuses them.
 
-2. **Test cases must exist.** Check for `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/test-cases-v1.json`. If missing, abort and tell the user to run:
+2. **Test cases must exist.** Check for `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/test-cases-v2.json` (preferred) or `test-cases-v1.json` (fallback). If neither exists, abort and tell the user to run:
    ```
-   dotnet.exe run --project .tools/second-brain-mcp/src/SecondBrain.PromptEval -- generate-test-cases
+   dotnet.exe run --project .tools/second-brain-mcp/src/SecondBrain.PromptEval -- generate-test-cases --output test-cases-v2.json --set-id tc-v2 --count 12
    ```
    then hand-review the output before retrying.
+
+   When invoking `tune` in Phase 1, pass `--test-cases test-cases-v2.json` if v2 exists. Default (no flag) uses v1, which is the legacy 15-case set kept for historical comparison.
 
 3. **Build must succeed.** `cd .tools/second-brain-mcp && dotnet.exe build second-brain-mcp.slnx --verbosity minimal`. If it fails, abort.
 
@@ -68,12 +70,16 @@ ARGS="<the user's arguments>"
 # parse --surface, --iteration-cap, --dry-run
 ```
 
-Execute the tune command, capturing stdout+stderr to a tee'd log:
+Execute the tune command, capturing stdout+stderr to a tee'd log. Pass `--test-cases test-cases-v2.json` if v2 exists (preferred); otherwise omit to use v1:
 
 ```bash
 cd .tools/second-brain-mcp
+TEST_CASES_FLAG=""
+if [ -f src/SecondBrain.PromptEval/state/test-cases-v2.json ]; then
+  TEST_CASES_FLAG="--test-cases test-cases-v2.json"
+fi
 dotnet.exe run --project src/SecondBrain.PromptEval -- tune \
-  --surface "$SURFACE" --iteration-cap "$ITERATION_CAP" \
+  --surface "$SURFACE" --iteration-cap "$ITERATION_CAP" $TEST_CASES_FLAG \
   2>&1 | tee /tmp/prompt-eval-cycle-run.log
 ```
 
@@ -271,7 +277,11 @@ Re-score the baseline against the (possibly fixed) pipeline:
 ```bash
 rm -f .tools/second-brain-mcp/src/SecondBrain.PromptEval/state/score-cache.json
 cd .tools/second-brain-mcp
-dotnet.exe run --project src/SecondBrain.PromptEval -- score 2>&1 | tee /tmp/prompt-eval-cycle-verify.log
+TEST_CASES_FLAG=""
+if [ -f src/SecondBrain.PromptEval/state/test-cases-v2.json ]; then
+  TEST_CASES_FLAG="--test-cases test-cases-v2.json"
+fi
+dotnet.exe run --project src/SecondBrain.PromptEval -- score $TEST_CASES_FLAG 2>&1 | tee /tmp/prompt-eval-cycle-verify.log
 ```
 
 Capture the new baseline F2 from the output (`Mean F2:           0.XXX`).
@@ -537,7 +547,7 @@ Optional free-form context: anything that doesn't fit the structured sections ab
 | Any items in FLAGGED FOR REVIEW | Carried-forward findings (one entry each) |
 | Phase 6 promoted a new prompt this cycle | Operational tasks: redeploy MCP service via `update.ps1` |
 | Phase 6 attempted promotion but reverted | Operational tasks: investigate why the pinned prompt failed to build |
-| Index fingerprint at run-time differs from test-cases-v1.json's | Operational tasks: regenerate test cases |
+| Index fingerprint at run-time differs from active test-cases-v*.json | Operational tasks: regenerate test cases |
 | Verify regressed | Notes: warn that the previous cycle's fixes need review |
 
 The "promote pinned-best to production" reminder no longer appears in Operational tasks — that promotion now happens automatically in Phase 6 of every cycle. If the promotion was skipped (no diff), there's nothing to remind. If it was attempted, the redeploy reminder fires instead.
