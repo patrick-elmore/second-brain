@@ -278,4 +278,48 @@ public sealed class ClaudeSessionTests : IDisposable
 
         session.Info().Messages.Should().Be(0);
     }
+
+    // ── AskOverrides ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task AskAsync_NoOverrides_UsesProductionSystemPrompt()
+    {
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var session = MakeSession(fake);
+
+        await session.AskAsync("Q?", null, "low", CancellationToken.None);
+
+        var callJson = JsonSerializer.Serialize(fake.Calls[0]);
+        // The default system prompt mentions specific second-brain concepts
+        callJson.Should().Contain("second");
+    }
+
+    [Fact]
+    public async Task AskAsync_SystemPromptOverride_UsedInsteadOfDefault()
+    {
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var session = MakeSession(fake);
+        var overrides = new AskOverrides(SystemPromptOverride: "CUSTOM_SYSTEM_PROMPT_MARKER");
+
+        await session.AskAsync("Q?", null, "low", CancellationToken.None, overrides);
+
+        var callJson = JsonSerializer.Serialize(fake.Calls[0]);
+        callJson.Should().Contain("CUSTOM_SYSTEM_PROMPT_MARKER");
+    }
+
+    [Fact]
+    public async Task AskAsync_UserMessageWrapper_AppliedToUserMessage()
+    {
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var session = MakeSession(fake);
+        var overrides = new AskOverrides(UserMessageWrapperTemplate: "PREFIX: {query} :SUFFIX");
+
+        await session.AskAsync("the question", null, "low", CancellationToken.None, overrides);
+
+        var callJson = JsonSerializer.Serialize(fake.Calls[0]);
+        callJson.Should().Contain("PREFIX: the question :SUFFIX");
+    }
 }

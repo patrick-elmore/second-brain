@@ -216,6 +216,38 @@ public sealed class ToolLoopTests : IDisposable
         result.OutputTokensUsed.Should().Be(150);
     }
 
+    // ── overrides ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_SystemPromptOverride_UsedInRequest()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var loop = MakeLoop(fake);
+
+        await loop.RunAsync(
+            UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None,
+            systemPromptOverride: "CUSTOM_PROMPT_MARKER");
+
+        var callJson = JsonSerializer.Serialize(fake.Calls[0]);
+        callJson.Should().Contain("CUSTOM_PROMPT_MARKER");
+    }
+
+    [Fact]
+    public async Task RunAsync_NoOverride_UsesDefaultSystemPrompt()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        fake.EnqueueText("Reply.");
+        var loop = MakeLoop(fake);
+
+        await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
+
+        var callJson = JsonSerializer.Serialize(fake.Calls[0]);
+        callJson.Should().NotContain("CUSTOM_PROMPT_MARKER");
+    }
+
     [Fact]
     public async Task RunAsync_FilesReferenced_DeduplicatedCaseInsensitively()
     {

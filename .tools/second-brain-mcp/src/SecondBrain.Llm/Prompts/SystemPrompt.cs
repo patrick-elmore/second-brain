@@ -8,7 +8,7 @@ namespace SecondBrain.Llm.Prompts;
 /// the <c>{ALIASES}</c> marker. The markdown files are the single source of
 /// truth — edit them, rebuild, redeploy.
 /// </summary>
-internal static class SystemPrompt
+public static class SystemPrompt
 {
     private const string PromptResource = "SecondBrain.Llm.Prompts.system_prompt.md";
     private const string AliasResource = "SecondBrain.Llm.Prompts.aliases.md";

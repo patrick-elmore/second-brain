@@ -10,5 +10,7 @@
     <Project Path="src/SecondBrain.Llm/SecondBrain.Llm.csproj" />
     <Project Path="src/SecondBrain.Mcp/SecondBrain.Mcp.csproj" />
     <Project Path="src/SecondBrain.Mcp.Tests/SecondBrain.Mcp.Tests.csproj" />
+    <Project Path="src/SecondBrain.PromptEval/SecondBrain.PromptEval.csproj" />
+    <Project Path="src/SecondBrain.PromptEval.Tests/SecondBrain.PromptEval.Tests.csproj" />
   </Folder>
 </Solution>

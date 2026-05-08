@@ -61,7 +61,8 @@ public sealed class ClaudeSession
         string question,
         string? compactInstruction,
         string effort,
-        CancellationToken ct)
+        CancellationToken ct,
+        AskOverrides? overrides = null)
     {
         // Track any compaction cost incurred inside this ask so the per-ask
         // cost reflects the full LLM spend (tool loop + auto/explicit compact).
@@ -76,15 +77,25 @@ public sealed class ClaudeSession
         var requestId = GenerateRequestId();
         var (model, apiEffort) = ResolveEffort(effort);
 
+        // Apply user-message wrapper template if supplied. Template uses {query} as
+        // the placeholder; if the placeholder is absent we still wrap (template-only),
+        // matching the proposer's intended template-as-prefix usage.
+        var wrappedQuestion = overrides?.UserMessageWrapperTemplate is { } template
+            ? template.Replace("{query}", question)
+            : question;
+
         // Append user question
         _messages.Add(new MessageParam
         {
             Role = Role.User,
-            Content = question,
+            Content = wrappedQuestion,
         });
 
         // Run the tool loop (modifies _messages in place)
-        var loopResult = await _toolLoop.RunAsync(_messages, model, apiEffort, ct);
+        var loopResult = await _toolLoop.RunAsync(
+            _messages, model, apiEffort, ct,
+            systemPromptOverride: overrides?.SystemPromptOverride,
+            toolsOverride: overrides?.ToolsOverride);
 
         _approximateTokens += loopResult.InputTokensUsed + loopResult.OutputTokensUsed;
         _lastActivity = DateTime.UtcNow;

@@ -45,10 +45,13 @@ internal sealed class ToolLoop
         List<MessageParam> messages,
         string model,
         Effort apiEffort,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? systemPromptOverride = null,
+        IReadOnlyList<ToolUnion>? toolsOverride = null)
     {
         var filesThisTurn = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var tools = ToolDefinitions.Build();
+        var tools = toolsOverride ?? ToolDefinitions.Build();
+        var systemPromptText = systemPromptOverride ?? SystemPrompt.Text;
         var toolsCalled = 0;
         long inputTokens = 0;
         long outputTokens = 0;
@@ -64,7 +67,7 @@ internal sealed class ToolLoop
             // System prompt as a cacheable text block (caches across all calls).
             var systemBlocks = new List<TextBlockParam>
             {
-                new() { Text = SystemPrompt.Text, CacheControl = new CacheControlEphemeral() },
+                new() { Text = systemPromptText, CacheControl = new CacheControlEphemeral() },
             };
 
             var createParams = new MessageCreateParams
