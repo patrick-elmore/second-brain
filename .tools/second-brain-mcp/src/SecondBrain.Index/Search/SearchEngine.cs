@@ -28,9 +28,22 @@ public sealed class SearchEngine
 
         var snipTokens = Math.Clamp(p.SnippetTokens, 1, 64);
         var filter = BuildFilter(p);
-        var hits = p.Query != null
-            ? RunFtsSearch(conn, p, filter, snipTokens)
-            : RunFilterOnlySearch(conn, p, filter);
+        IReadOnlyList<SearchHit> hits;
+        try
+        {
+            hits = p.Query != null
+                ? RunFtsSearch(conn, p, filter, snipTokens)
+                : RunFilterOnlySearch(conn, p, filter);
+        }
+        catch (SqliteException)
+        {
+            // FTS5 syntax errors come from queries the LLM constructs that contain
+            // unquoted multi-word phrases, special chars, or terms that look like
+            // column references (e.g. "vin AND ...", "cache-first", ".NET").
+            // Return empty hits rather than throwing — the model can retry with
+            // different syntax or fall back to broader queries.
+            return new SearchResult([], null);
+        }
 
         IReadOnlyList<SourceSummary>? sources = null;
         if (p.ListSources && hits.Count > 0)

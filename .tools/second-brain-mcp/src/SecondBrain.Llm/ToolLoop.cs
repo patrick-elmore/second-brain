@@ -41,6 +41,15 @@ internal sealed class ToolLoop
             Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_VERTEX"), "1", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Hard cap on tool-use turns within a single ask. Each turn appends the
+    /// model's response and the tool results to the message history; without a
+    /// cap, a model that keeps calling tools can spiral past the 200K-token
+    /// context limit and crash the request. Surfaced by the prompt-eval harness
+    /// when one test case hit 208K tokens.
+    /// </summary>
+    public const int MaxToolTurns = 25;
+
     public async Task<ToolLoopResult> RunAsync(
         List<MessageParam> messages,
         string model,
@@ -53,6 +62,7 @@ internal sealed class ToolLoop
         var tools = toolsOverride ?? ToolDefinitions.Build();
         var systemPromptText = systemPromptOverride ?? SystemPrompt.Text;
         var toolsCalled = 0;
+        var toolTurns = 0;
         long inputTokens = 0;
         long outputTokens = 0;
         decimal estimatedCost = 0m;
@@ -144,6 +154,23 @@ internal sealed class ToolLoop
                 Role = Role.User,
                 Content = toolResults,
             });
+
+            // Enforce the tool-turn cap. If we've hit the limit, append a forcing
+            // message that tells the model to synthesize from what it has rather
+            // than calling more tools. The next loop iteration will produce the
+            // synthesis and exit (StopReason != ToolUse).
+            toolTurns++;
+            if (toolTurns >= MaxToolTurns)
+            {
+                _logger.LogWarning(
+                    "Tool loop reached MaxToolTurns={Cap}; forcing final synthesis to prevent context overflow.",
+                    MaxToolTurns);
+                messages.Add(new MessageParam
+                {
+                    Role = Role.User,
+                    Content = $"Tool budget exhausted ({MaxToolTurns} turns). Synthesize the best answer you can from the information already gathered, citing what you have. Do not call any more tools.",
+                });
+            }
         }
 
         return new ToolLoopResult
@@ -341,8 +368,34 @@ internal sealed class ToolLoop
         }
 
         var path = pathEl.GetString()!;
-        filesThisTurn.Add(path);
-        _stats?.RecordFileRead(path);
-        return _fileReader.Read(path);
+
+        // Catch the two common errors and return guidance the model can act on.
+        // Bare exception messages (FileNotFoundException, UnauthorizedAccessException)
+        // don't tell the model what to do next; this does.
+        try
+        {
+            var content = _fileReader.Read(path);
+            // Only record as referenced if the read succeeded — hallucinated paths
+            // shouldn't pollute FilesReferenced.
+            filesThisTurn.Add(path);
+            _stats?.RecordFileRead(path);
+            return content;
+        }
+        catch (FileNotFoundException)
+        {
+            return $"File not found at path: {path}\n\n" +
+                   "Use only absolute_path values returned by `search`. Do not invent or extrapolate paths " +
+                   "from filenames or snippet content. If you need a different file, run `search` again.";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return $"Path is outside the indexed source folders: {path}\n\n" +
+                   "Use only absolute_path values returned by `search`. The corpus is read-only and bounded " +
+                   "to the configured source roots; arbitrary local paths cannot be read.";
+        }
+        catch (InvalidDataException ex)
+        {
+            return $"Cannot read {path}: {ex.Message}";
+        }
     }
 }

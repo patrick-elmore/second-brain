@@ -145,6 +145,33 @@ public sealed class IndexBuilderAndSearchTests : IDisposable
     // ── SearchEngine — text search ────────────────────────────────────────────
 
     [Fact]
+    public void Search_MalformedFtsQuery_ReturnsEmptyHitsWithoutThrowing()
+    {
+        // FTS5 treats "vin AND" as a column reference and throws SqliteException.
+        // The engine should swallow that and return empty so the LLM can retry.
+        WriteSource("a.md", "some content here");
+        BuildIndex();
+
+        var act = () => Search(new SearchParams(Query: "vin AND"));
+
+        var result = act.Should().NotThrow().Subject;
+        result.Hits.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Search_QueryWithSpecialChars_ReturnsEmptyInsteadOfCrashing()
+    {
+        WriteSource("a.md", "content");
+        BuildIndex();
+
+        // ".NET 10" produces SqliteException because FTS5 treats "NET" as a column ref
+        var act = () => Search(new SearchParams(Query: ".NET 10 migration"));
+
+        var result = act.Should().NotThrow().Subject;
+        result.Hits.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Search_TextQuery_MatchesContent()
     {
         WriteSource("auth.md", "Authentication tokens expire after 24 hours.");

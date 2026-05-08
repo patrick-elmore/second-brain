@@ -216,6 +216,71 @@ public sealed class ToolLoopTests : IDisposable
         result.OutputTokensUsed.Should().Be(150);
     }
 
+    // ── iteration cap ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_ToolLoopHitsCap_ForcedSynthesisInjected()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        // Queue MaxToolTurns + 1 tool-use responses, then a final text response.
+        // The cap injects a forcing message; the next response should be the final synthesis.
+        for (var i = 0; i < ToolLoop.MaxToolTurns; i++)
+            fake.EnqueueToolUse($"tu{i}", "search", """{"queries":["alpha"]}""");
+        fake.EnqueueText("Synthesis after forced stop.");
+
+        var loop = MakeLoop(fake);
+
+        var result = await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
+
+        result.Synthesis.Should().Be("Synthesis after forced stop.");
+        result.ToolsCalled.Should().Be(ToolLoop.MaxToolTurns);
+    }
+
+    // ── read_file error guidance ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_ReadFileNotFound_ReturnsActionableErrorAndPathNotInFilesReferenced()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        var bogusPath = Path.Combine(_sourceDir, "definitely-does-not-exist.md");
+        fake.EnqueueToolUse("tu1", "read_file", $$$"""{"path": {{{JsonSerializer.Serialize(bogusPath)}}} }""");
+        fake.EnqueueText("Done.");
+
+        var loop = MakeLoop(fake);
+
+        var result = await loop.RunAsync(UserMessage("Read."), "haiku", Effort.Low, CancellationToken.None);
+
+        // Hallucinated paths must not pollute FilesReferenced — only successful reads count.
+        result.FilesReferenced.Should().NotContain(bogusPath);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReadFileOutsideAllowedRoots_ReturnsActionableError()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        // Path that's a real file but outside the allowed root
+        var outsidePath = Path.Combine(Path.GetTempPath(), "outside.md");
+        File.WriteAllText(outsidePath, "secret");
+        try
+        {
+            fake.EnqueueToolUse("tu1", "read_file", $$$"""{"path": {{{JsonSerializer.Serialize(outsidePath)}}} }""");
+            fake.EnqueueText("Done.");
+
+            var loop = MakeLoop(fake);
+
+            var result = await loop.RunAsync(UserMessage("Read."), "haiku", Effort.Low, CancellationToken.None);
+
+            result.FilesReferenced.Should().NotContain(outsidePath);
+        }
+        finally
+        {
+            File.Delete(outsidePath);
+        }
+    }
+
     // ── overrides ─────────────────────────────────────────────────────────────
 
     [Fact]
