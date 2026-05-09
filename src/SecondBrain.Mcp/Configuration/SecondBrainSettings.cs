@@ -78,7 +78,7 @@ public sealed class SecondBrainSettings
     public int IndexMaxBytes { get; set; } = 5_000_000;
 
     [JsonPropertyName("index_refresh_interval_seconds")]
-    public int IndexRefreshIntervalSeconds { get; set; } = 300;
+    public int IndexRefreshIntervalSeconds { get; set; } = 3600;
 
     /// <summary>
     /// Seconds before <c>McpTimeout</c> expires at which the summarizer stops

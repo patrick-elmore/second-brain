@@ -283,7 +283,7 @@ mcp__second-brain__generate_summaries({ "source_type": "1on1" })
 - **Auto-compact at 150K tokens.** When `approximate_tokens` ≥ 150,000 at the start of an `ask`, compaction runs first. The full message log becomes a single summary message before the new question is appended.
 - **Disk persistence is unconditional.** State is written to `index/session-state.json` after every `ask` and after every `compact`/`reset`. Restarting the service preserves the conversation.
 - **Prompt caching is on.** Three `cache_control: ephemeral` breakpoints are placed per request: on the system prompt, on the last tool definition, and on the last message. Cache hits drop input cost by ~10× on Sonnet/Opus and ~10× on Haiku, but only fire above the per-model minimum prefix size (4096 tokens for Haiku 4.5, 1024 for Sonnet/Opus). Short conversations don't cache.
-- **Internal tools are not the MCP tools.** Inside `ask`, the model uses its own `search` and `read_file` tools defined in `ToolDefinitions.cs`. These are invoked by the model, not the caller; callers only see `tools_called` (a count) and `files_referenced` (paths) in the response. The internal `search` differs from the external MCP `search` in two ways: (1) it takes a `queries` array (1–8 variants) rather than a single `query` string, and fuses per-variant rankings via Reciprocal Rank Fusion — documents scoring well across multiple variants surface above single-variant noise; (2) scores are positive RRF values (higher = more relevant) rather than negative BM25 values. The external MCP `search` tool is unchanged: single `query` string, negative BM25 scores. The internal session also maintains an entity expansion table (loaded from `Prompts/aliases.md`) that tells the model to OR alias groups together for known entities — `Atlas` → `(Atlas OR "AWS Atlas" OR Atless)` — before issuing any search.
+- **Internal tools are not the MCP tools.** Inside `ask`, the model uses its own `search` and `read_file` tools defined in `ToolDefinitions.cs`. These are invoked by the model, not the caller; callers only see `tools_called` (a count) and `files_referenced` (paths) in the response. The internal `search` differs from the external MCP `search` in two ways: (1) it takes a `queries` array (1–8 variants) rather than a single `query` string, and fuses per-variant rankings via Reciprocal Rank Fusion — documents scoring well across multiple variants surface above single-variant noise; (2) scores are positive RRF values (higher = more relevant) rather than negative BM25 values. The external MCP `search` tool is unchanged: single `query` string, negative BM25 scores. The internal session also maintains an entity expansion table (loaded from `Prompts.local/aliases.md`, gitignored — see [Templates and live overrides](#templates-and-live-overrides)) that tells the model to OR alias groups together for known entities — `Atlas` → `(Atlas OR "AWS Atlas" OR Atless)` — before issuing any search.
 
 Practical guidance for agents:
 
@@ -432,6 +432,18 @@ Beyond the MCP JSON-RPC endpoint, the service exposes three GETs for diagnostics
 
 ## Configuration files
 
+### Templates and live overrides
+
+Three personal-data files use the same template/local pattern so the public repo never carries personal content:
+
+| Live file (gitignored) | Template (committed) | Bootstrap |
+|---|---|---|
+| `config/sources.json` | `config/sources-template.json` | `install.ps1` copies template → `sources.json` in install dir on first install if no real one exists. |
+| `Prompts.local/system_prompt.md` | `src/SecondBrain.Llm/Prompts/system_prompt-template.md` | App copies template → live file in install dir on first run (`SystemPrompt.cs`). |
+| `Prompts.local/aliases.md` | `src/SecondBrain.Llm/Prompts/aliases-template.md` | Same. |
+
+The templates ship with the binary via `<None CopyToOutputDirectory="PreserveNewest" />`. The live files are auto-bootstrapped from them when missing, then user-edited and never overwritten. Edit the live file, restart the service.
+
 ### `config/mcp_config.json` (per-install)
 
 Service-level settings. Read by `Program.cs` at startup. Lives at `%LOCALAPPDATA%\SecondBrainMcpServer\mcp_config.json`.
@@ -447,9 +459,12 @@ Key fields:
 - `second_brain.fts_db_path`, `requests_db_path`, `session_state_path` — relative to install dir.
 - `second_brain.sources_config` — points at `config/sources.json` in the install dir.
 - `second_brain.index_max_bytes` — file-size cap for indexing (`5000000`).
-- `second_brain.index_refresh_interval_seconds` — interval for the background incremental-refresh loop (`300` = every 5 minutes). Set to `0` to disable. The loop runs once on startup to catch drift, then on the configured cadence.
+- `second_brain.index_refresh_interval_seconds` — interval for the background incremental-refresh loop (`3600` = every hour). Set to `0` to disable. The loop runs once on startup to catch drift, then on the configured cadence.
 - `second_brain.vertex_base_url` — optional override for the Vertex endpoint. When non-empty, the service routes Vertex requests to this URL (e.g. `http://localhost:9996` for a local proxy) instead of the SDK's region-derived Google URL. Leave as `""` to use the default.
-- `second_brain.summarize_safety_buffer_seconds` — reserved; not currently used.
+- `second_brain.summarize_safety_buffer_seconds` — seconds before the per-call `mcp_timeout` at which `generate_summaries` stops dispatching new batch waves so in-flight calls can complete and the response can return cleanly. Default `30`.
+- `enable_logging` — turns the file/console Serilog sinks on or off. Default `true`.
+- `second_brain.state_persist_every_n_messages` — how often `session-state.json` is rewritten during a long ask, expressed in messages added since the last write. Default `5`.
+- `second_brain.state_backup_count` — how many rotating `session-state.json.bak.N` copies to retain. Default `5`.
 
 ### `config/pricing.json` (versioned in repo)
 
@@ -483,7 +498,7 @@ From an admin PowerShell at the repo root:
 .\scripts\install.ps1
 ```
 
-Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), copies `pricing.json` and `sources.json` (or `sources-template.json` as `sources.json` if you don't have a real one yet), registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
+Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), always refreshes `pricing.json`, copies `sources.json` if you have one or falls back to `sources-template.json` (renamed to `sources.json` in the install dir so you can edit it in place), registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
 
 After install, you must:
 1. Set `ANTHROPIC_API_KEY` (or the Vertex env vars) at machine scope.
@@ -508,7 +523,7 @@ Stops and removes the service, prompts before deleting the install directory.
 
 ### Rebuilding the index
 
-A background loop inside the service (`IndexRefreshService`) runs an incremental update on startup and then every `index_refresh_interval_seconds` (default 300 = 5 minutes). For most use, you do not need to think about rebuilds — the index trails the filesystem by at most that interval. Set the interval to `0` in `mcp_config.json` to disable the loop.
+A background loop inside the service (`IndexRefreshService`) runs an incremental update on startup and then every `index_refresh_interval_seconds` (default 3600 = every hour). For most use, you do not need to think about rebuilds — the index trails the filesystem by at most that interval. Set the interval to `0` in `mcp_config.json` to disable the loop.
 
 For an immediate refresh, the MCP exposes the `rebuild_index` tool — see [`rebuild_index`](#rebuild_index--refresh-ftsdb). Two ways to invoke:
 
@@ -583,6 +598,33 @@ cp alias-mining\candidates.md src\SecondBrain.Llm\Prompts.local\aliases.md
 net stop SecondBrainHttpMcp; net start SecondBrainHttpMcp
 ```
 
+### Prompt evaluation
+
+`SecondBrain.PromptEval` is a developer-only harness that scores the system prompt against a fixed test set, proposes variants, and tunes toward better F2. State lives in `src/SecondBrain.PromptEval/state/`:
+
+- `test-cases-vN.json` — synthetic test cases (questions + reference file lists)
+- `pinned-best.json` — the durable best-known prompt across all cycles
+- `runs/<phase-id>.json` — full record of each tuning run
+- `findings/<phase-id>.md` — issues observed in run logs (per cycle)
+- `next-run.md` — recommendations the cycle wrote for the next invocation
+
+Direct CLI:
+```bash
+# Generate a fresh test set from the corpus
+dotnet run --project src/SecondBrain.PromptEval -- generate-test-cases \
+    --output test-cases-v2.json --set-id tc-v2 --count 12
+
+# Baseline-score the current production prompt
+dotnet run --project src/SecondBrain.PromptEval -- score \
+    --test-cases test-cases-v2.json
+
+# Tune (proposer + scorer + plateau detection)
+dotnet run --project src/SecondBrain.PromptEval -- tune \
+    --surface system_prompt --iteration-cap 3 --test-cases test-cases-v2.json
+```
+
+Most operators don't run those directly — they invoke `/prompt-eval-cycle`, the skill at `.claude/skills/prompt-eval-cycle/SKILL.md`, which wraps the full self-improvement loop (run → commit results → analyze logs → fix mechanical bugs → verify → recommend). The cycle does not auto-promote winners into the deployed service; promotion is manual — see [Manual prompt promotion](#manual-prompt-promotion) above.
+
 ---
 
 ## The skill
@@ -597,6 +639,8 @@ net stop SecondBrainHttpMcp; net start SecondBrainHttpMcp
 Subcommands are 1:1 with MCP tools. The skill exists for convenience — the underlying capability is identical to direct MCP invocation.
 
 A staging copy lives at `.claude/skills/beta-brain/SKILL.md` in this repo. Edit-validate-promote loop: change `beta-brain`, exercise it via `/beta-brain`, then `cp` over the global `~/.claude/skills/brain/SKILL.md` to promote.
+
+A second skill, `.claude/skills/prompt-eval-cycle/SKILL.md`, runs the full prompt-tuning self-improvement loop — see [Prompt evaluation](#prompt-evaluation) above.
 
 ---
 
@@ -631,6 +675,12 @@ src/
 .claude/
   agents/                              project-specific agent specs
   skills/beta-brain/SKILL.md           staging copy of the global /brain skill
+  skills/prompt-eval-cycle/SKILL.md    self-improvement loop wrapper for PromptEval
+
+(gitignored, repo-root runtime/dev outputs — harmless if deleted)
+index/                                 stale dev fts.db (the live one is in the install dir)
+tmp/                                   scratch
+alias-mining/                          AliasMiner output (candidates.md before review)
 
 (install location, gitignored, machine-local)
 %LOCALAPPDATA%\SecondBrainMcpServer\
@@ -647,9 +697,7 @@ src/
     fts.db                             FTS5 content index
     requests.db                        request/response history
     session-state.json                 persistent ClaudeSession state
-    stats.json                         persisted /stats counters
   logs/
     second_brain_*.log                 Serilog output
+    stats.json                         persisted /stats counters (rotates on service stop)
 ```
-
-The legacy Python `scripts/` directory and pre-MCP `index/` and `tmp/` folders at the repo root are vestigial — they are gitignored but harmless. The .NET service does not read them.

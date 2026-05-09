@@ -81,16 +81,26 @@ if (-not (Test-Path $InstallConfigDir)) {
 Copy-Item (Join-Path $ConfigDir "pricing.json") (Join-Path $InstallConfigDir "pricing.json") -Force
 Write-Host "pricing.json copied to install directory"
 
-# Copy sources.json if it exists in the repo config
-$RepoSourcesJson = Join-Path $ConfigDir "sources.json"
-$InstallSourcesDir = Join-Path $InstallDir "config"
+# Copy sources.json — prefer real one from repo config, fall back to template.
+# The template gets copied as sources.json so the install dir always has a
+# starter file the user can edit. Subsequent installs preserve any local edits.
+$RepoSourcesJson    = Join-Path $ConfigDir "sources.json"
+$RepoSourcesTemplate = Join-Path $ConfigDir "sources-template.json"
+$InstallSourcesDir   = Join-Path $InstallDir "config"
 if (-not (Test-Path $InstallSourcesDir)) {
     New-Item -ItemType Directory -Path $InstallSourcesDir -Force | Out-Null
 }
 $InstallSourcesJson = Join-Path $InstallSourcesDir "sources.json"
-if ((Test-Path $RepoSourcesJson) -and (-not (Test-Path $InstallSourcesJson))) {
-    Copy-Item $RepoSourcesJson $InstallSourcesJson
-    Write-Host "sources.json copied to $InstallSourcesJson"
+if (-not (Test-Path $InstallSourcesJson)) {
+    if (Test-Path $RepoSourcesJson) {
+        Copy-Item $RepoSourcesJson $InstallSourcesJson
+        Write-Host "sources.json copied to $InstallSourcesJson"
+    } elseif (Test-Path $RepoSourcesTemplate) {
+        Copy-Item $RepoSourcesTemplate $InstallSourcesJson
+        Write-Host "sources-template.json copied to $InstallSourcesJson — edit before building the index"
+    } else {
+        Write-Warning "No sources.json or sources-template.json found in $ConfigDir; skipping. You'll need to create $InstallSourcesJson manually."
+    }
 }
 
 # Read service name from config
