@@ -1,0 +1,5 @@
+# Eval state contains per-case run results (synthesized text from real
+# meeting transcripts, source-file path lists), test cases referencing
+# personal notes, and findings docs. Treat as personal-data output.
+# Regenerable on next eval invocation.
+state/
