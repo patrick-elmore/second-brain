@@ -37,9 +37,10 @@ if (-not ($runtimes | Where-Object { $_ -match 'Microsoft\.AspNetCore\.App 10\.'
 Write-Host ".NET 10 SDK and ASP.NET Core runtime verified."
 
 $ScriptDir   = $PSScriptRoot
-$McpProj     = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.Mcp") "SecondBrain.Mcp.csproj"
-$BuilderProj = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.IndexBuilder") "SecondBrain.IndexBuilder.csproj"
-$ConfigDir   = Join-Path $ScriptDir "config"
+$RepoRoot    = Split-Path $ScriptDir -Parent
+$McpProj     = Join-Path (Join-Path (Join-Path $RepoRoot "src") "SecondBrain.Mcp") "SecondBrain.Mcp.csproj"
+$BuilderProj = Join-Path (Join-Path (Join-Path $RepoRoot "src") "SecondBrain.IndexBuilder") "SecondBrain.IndexBuilder.csproj"
+$ConfigDir   = Join-Path $RepoRoot "config"
 $InstallDir  = Join-Path $env:LOCALAPPDATA "SecondBrainMcpServer"
 $IndexDir    = Join-Path $InstallDir "index"
 
@@ -80,8 +81,8 @@ if (-not (Test-Path $InstallConfigDir)) {
 Copy-Item (Join-Path $ConfigDir "pricing.json") (Join-Path $InstallConfigDir "pricing.json") -Force
 Write-Host "pricing.json copied to install directory"
 
-# Copy sources.json if it exists in the repo root config
-$RepoSourcesJson = Join-Path (Split-Path $ScriptDir -Parent) "config" "sources.json"
+# Copy sources.json if it exists in the repo config
+$RepoSourcesJson = Join-Path $ConfigDir "sources.json"
 $InstallSourcesDir = Join-Path $InstallDir "config"
 if (-not (Test-Path $InstallSourcesDir)) {
     New-Item -ItemType Directory -Path $InstallSourcesDir -Force | Out-Null

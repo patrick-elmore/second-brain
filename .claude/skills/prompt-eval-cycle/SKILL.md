@@ -13,10 +13,11 @@ One cycle:
 3. **Analyze** the run logs for production code bugs the eval surfaced
 4. **Fix** mechanical bugs (with tests); flag ambiguous ones in a findings doc
 5. **Verify** by re-scoring the baseline against the fixed pipeline
-6. **Promote pinned-best to production** if the pinned prompt differs from `src/SecondBrain.Llm/Prompts/system_prompt.md` — distinct commit
-7. **Commit improvements** with before/after F2 in the commit message
+6. **Commit improvements** (or just `next-run.md`) with before/after F2 in the commit message
 
-Two or three commits per cycle: one for results, optionally one for prompt promotion, one for improvements/recommendations. They are intentionally distinct so the audit trail shows "this finding triggered this fix" and "this tuning win is now in production."
+Two commits per cycle: one for results, one for improvements/recommendations. They are intentionally distinct so the audit trail shows "this finding triggered this fix."
+
+The cycle does not auto-promote `pinned-best.json` into the deployed service's live prompt — `pinned-best.json` is the durable record, and promotion is surfaced as a manual NEXT STEP because it requires admin (LocalSystem-owned `%LOCALAPPDATA%\SecondBrainMcpServer\Prompts.local\system_prompt.md`) and a service restart. See "Manual prompt promotion" in the README.
 
 ## When to invoke
 
@@ -35,21 +36,21 @@ Two or three commits per cycle: one for results, optionally one for prompt promo
 
 Before doing anything that costs LLM calls or touches git:
 
-1. **Working tree must be clean.** Run `git status -s` from the repo root. If anything is modified or untracked (other than expected eval state), stop and report. The cycle creates two or three sequential commits; a dirty tree confuses them.
+1. **Working tree must be clean.** Run `git status -s` from the repo root. If anything is modified or untracked (other than expected eval state), stop and report. The cycle creates two sequential commits; a dirty tree confuses them.
 
-2. **Test cases must exist.** Check for `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/test-cases-v2.json` (preferred) or `test-cases-v1.json` (fallback). If neither exists, abort and tell the user to run:
+2. **Test cases must exist.** Check for `src/SecondBrain.PromptEval/state/test-cases-v2.json` (preferred) or `test-cases-v1.json` (fallback). If neither exists, abort and tell the user to run:
    ```
-   dotnet.exe run --project .tools/second-brain-mcp/src/SecondBrain.PromptEval -- generate-test-cases --output test-cases-v2.json --set-id tc-v2 --count 12
+   dotnet.exe run --project src/SecondBrain.PromptEval -- generate-test-cases --output test-cases-v2.json --set-id tc-v2 --count 12
    ```
    then hand-review the output before retrying.
 
    When invoking `tune` in Phase 1, pass `--test-cases test-cases-v2.json` if v2 exists. Default (no flag) uses v1, which is the legacy 15-case set kept for historical comparison.
 
-3. **Build must succeed.** `cd .tools/second-brain-mcp && dotnet.exe build second-brain-mcp.slnx --verbosity minimal`. If it fails, abort.
+3. **Build must succeed.** `dotnet.exe build second-brain-mcp.slnx --verbosity minimal`. If it fails, abort.
 
 4. **Baseline tests must pass.** `dotnet.exe test second-brain-mcp.slnx --verbosity minimal`. Capture the count for the cycle's "before" baseline. If any tests fail, abort.
 
-5. **Load prior recommendations.** Read `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/next-run.md` if it exists. This file is written at the end of every cycle and reflects what the prior cycle suggested for this one. Print its contents verbatim under a heading "PRIOR-CYCLE RECOMMENDATIONS" so the user sees them before any LLM calls happen.
+5. **Load prior recommendations.** Read `src/SecondBrain.PromptEval/state/next-run.md` if it exists. This file is written at the end of every cycle and reflects what the prior cycle suggested for this one. Print its contents verbatim under a heading "PRIOR-CYCLE RECOMMENDATIONS" so the user sees them before any LLM calls happen.
 
    For each item in the prior recommendations:
    - **Tuning suggestion** (e.g., raise iteration cap, switch surface): if the user invoked the skill with no overriding argument, apply the suggestion to this cycle's parameters. Print "Applying: <suggestion>" so it's auditable. If the user passed a conflicting argument (e.g., `--iteration-cap 3` overriding a "raise to 5" suggestion), the user's argument wins; print "User override: <arg> overrides recommendation <suggestion>".
@@ -73,7 +74,6 @@ ARGS="<the user's arguments>"
 Execute the tune command, capturing stdout+stderr to a tee'd log. Pass `--test-cases test-cases-v2.json` if v2 exists (preferred); otherwise omit to use v1:
 
 ```bash
-cd .tools/second-brain-mcp
 TEST_CASES_FLAG=""
 if [ -f src/SecondBrain.PromptEval/state/test-cases-v2.json ]; then
   TEST_CASES_FLAG="--test-cases test-cases-v2.json"
@@ -94,8 +94,8 @@ Stop here if `--dry-run` was set. Print the summary and exit.
 ## Phase 2: Commit eval results
 
 Stage exactly:
-- `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/runs/<phase-id>.json`
-- `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/pinned-best.json`
+- `src/SecondBrain.PromptEval/state/runs/<phase-id>.json`
+- `src/SecondBrain.PromptEval/state/pinned-best.json`
 
 Do NOT stage `score-cache.json` (it's gitignored).
 
@@ -121,7 +121,7 @@ Tunable surface: <surface>
 Test set: <id> (<count> cases)
 ```
 
-This is **commit 1** for the cycle (of 2 or 3, depending on whether Phase 6 promotes). Do not push.
+This is **commit 1 of 2** for the cycle. Do not push.
 
 ## Phase 3: Analyze run logs
 
@@ -156,7 +156,7 @@ A "hard-blocking" issue is one that:
 
 **Soft issues** (warnings, edge cases, style preferences, contested design decisions on non-blockers) still flag-for-review. The flag-and-wait pattern is the right behavior for "we should think about this" — wrong for "this is breaking 4 cases every cycle."
 
-Write findings to `.tools/second-brain-mcp/src/SecondBrain.PromptEval/state/findings/<phase-id>.md`. The structure mirrors the final summary so the doc and the printed report tell the same story.
+Write findings to `src/SecondBrain.PromptEval/state/findings/<phase-id>.md`. The structure mirrors the final summary so the doc and the printed report tell the same story.
 
 ```markdown
 # Cycle findings: <phase-id>
@@ -275,8 +275,7 @@ Recipes are concrete change instructions for known patterns. For hard blockers w
 Re-score the baseline against the (possibly fixed) pipeline:
 
 ```bash
-rm -f .tools/second-brain-mcp/src/SecondBrain.PromptEval/state/score-cache.json
-cd .tools/second-brain-mcp
+rm -f src/SecondBrain.PromptEval/state/score-cache.json
 TEST_CASES_FLAG=""
 if [ -f src/SecondBrain.PromptEval/state/test-cases-v2.json ]; then
   TEST_CASES_FLAG="--test-cases test-cases-v2.json"
@@ -291,55 +290,7 @@ Compare against the original baseline from Phase 2:
 - **Unchanged (|delta| ≤ 0.01)**: fixes were neutral on retrieval quality (still worth keeping if they prevent crashes)
 - **Regressed (delta < -0.01)**: stop and flag. Either revert the auto-fixes or consult before committing.
 
-## Phase 6: Promote pinned-best to production prompt
-
-The pinned-best prompt is the best system prompt the harness has ever seen across all cycles. The production prompt that ships with the binary is `src/SecondBrain.Llm/Prompts/system_prompt.md`. This phase keeps them in sync automatically.
-
-Read both:
-- Pinned: `jq -r '.system_prompt.value' src/SecondBrain.PromptEval/state/pinned-best.json`
-- Production: `cat src/SecondBrain.Llm/Prompts/system_prompt.md`
-
-**If pinned-best.value is null or missing**: nothing to promote. Skip to Phase 7.
-
-**If pinned-best.value matches production verbatim**: nothing to promote (already in sync). Skip to Phase 7.
-
-**Otherwise** (pinned differs from production):
-
-1. Overwrite production with the pinned value:
-   ```bash
-   jq -r '.system_prompt.value' \
-     .tools/second-brain-mcp/src/SecondBrain.PromptEval/state/pinned-best.json \
-     > .tools/second-brain-mcp/src/SecondBrain.Llm/Prompts/system_prompt.md
-   ```
-
-2. Rebuild the solution. The prompt is an embedded resource; if the new file is malformed (encoding issue, truncation), the build will catch it. The pre-flight tests must still pass.
-   ```bash
-   cd .tools/second-brain-mcp
-   dotnet.exe build second-brain-mcp.slnx --verbosity minimal
-   dotnet.exe test second-brain-mcp.slnx --verbosity minimal --no-build
-   ```
-
-   If build or tests fail, **revert** (`git checkout -- src/SecondBrain.Llm/Prompts/system_prompt.md`) and flag in findings as a "promotion failure" issue. Continue to Phase 7 without the promotion commit.
-
-3. Stage and commit the prompt change as a distinct commit:
-   ```bash
-   git.exe add .tools/second-brain-mcp/src/SecondBrain.Llm/Prompts/system_prompt.md
-   git.exe commit -m "$(cat <<'EOF'
-   prompt-eval cycle <date>: promote pinned-best system prompt to production (F2 <pinned-score>)
-
-   Source: state/pinned-best.json (cycle <pinned phase-id>, iter <pinned iteration_id>)
-
-   The pinned-best prompt has not been in production until this commit. Run
-   update.ps1 to redeploy the MCP service so the live binary picks up the change.
-   EOF
-   )"
-   ```
-
-This is **commit 2 of 3** when promotion happens (commit 1 was results, commit 3 will be improvements/recommendations).
-
-**Important**: The cycle does NOT run `update.ps1`. That requires admin elevation and stops the Windows service for 30-60 seconds — too disruptive to do unattended. The redeploy is surfaced as a NEXT STEPS reminder for the user to run after reviewing.
-
-## Phase 7: Commit improvements
+## Phase 6: Commit improvements
 
 First, generate `state/next-run.md` per the format defined below. The file always exists at the end of every cycle, even when no fixes are applied — its purpose is to seed the next run.
 
@@ -348,7 +299,7 @@ Stage:
 - All code/test changes from Phase 4 (if any)
 - The findings doc from Phase 3 (if any)
 
-Even when no fixes are applied AND no findings were written, still commit so `next-run.md` is captured. There is always a final commit (whether 2 or 3 depending on whether Phase 6 ran).
+Even when no fixes are applied AND no findings were written, still commit so `next-run.md` is captured. There is always a final commit.
 
 Commit message format depends on what's in the commit:
 
@@ -380,7 +331,7 @@ Re-baseline: F2=<after> (was <before>, delta <signed>).
 Recommendations for next run captured in state/next-run.md.
 ```
 
-This is the **final commit** for the cycle (commit 2 if Phase 6 was skipped, commit 3 if Phase 6 promoted a new prompt).
+This is **commit 2 of 2** for the cycle.
 
 ## Reporting
 
@@ -466,9 +417,7 @@ VERIFICATION (re-baseline against the fixed pipeline)
 
 COMMITS
   <sha1>  prompt-eval cycle <date>: <surface> tuning F2 <pre>→<best>
-  <sha2>  prompt-eval cycle <date>: promote pinned-best system prompt to production (F2 <pinned-score>)
-          (only present when Phase 6 promoted a new prompt)
-  <sha3>  prompt-eval cycle <date>: <N> bug(s) fixed, baseline F2 <pre>→<post>
+  <sha2>  prompt-eval cycle <date>: <N> bug(s) fixed, baseline F2 <pre>→<post>
 
 ARTIFACTS
   Findings:  state/findings/<phase-id>.md
@@ -490,13 +439,12 @@ Generate the "NEXT STEPS" bullets by applying these rules in order. Output the b
 - **Flagged items present**: → "<N> finding(s) flagged for human review in state/findings/<phase-id>.md. Resolve before the next cycle."
 - **Tuning hit iteration cap with positive delta**: stopped reason was `iteration_cap` and best F2 > baseline + 0.02. → "Tuning was still improving at the cap. Consider raising --iteration-cap (current: <N>) on the next cycle."
 - **Stopped on plateau**: stopped reason was `plateau`. → "Tuning plateaued at iter <K>. The current surface may be near its limit; consider tuning a different surface next cycle (e.g. --surface tool_descriptions or user_wrapper)."
-- **Promoted prompt needs redeploy**: Phase 6 promoted the pinned-best prompt to production this cycle. → "Production prompt was updated to pinned-best (F2 <pinned-score>). Run `update.ps1` (admin) to redeploy the MCP service so the live binary picks up the change."
-- **Promotion failed**: Phase 6 attempted promotion but build/tests failed and the change was reverted. → "Pinned-best promotion was attempted but reverted because the build/tests failed against the new prompt. Investigate state/findings/<phase-id>.md before next cycle — the pinned prompt may have an encoding or format issue."
+- **Pinned-best advanced this cycle**: this cycle's best iteration overtook the prior pinned-best (i.e., `state/pinned-best.json` was rewritten in Phase 2). → "Pinned-best advanced to F2 <pinned-score>. To deploy: copy the new prompt into the running service's install dir and restart. From an admin PowerShell:\n```powershell\njq -r '.system_prompt.value' src/SecondBrain.PromptEval/state/pinned-best.json | Out-File -Encoding UTF8 \"$env:LOCALAPPDATA\\SecondBrainMcpServer\\Prompts.local\\system_prompt.md\"\nnet stop SecondBrainHttpMcp; net start SecondBrainHttpMcp\n```\n(See README → Service operations → Manual prompt promotion.)"
 - **No issues, no fixes, score moved**: no error patterns in logs and tuning improved scores anyway. → "Clean cycle. Re-run with a different surface or extend the iteration cap to push further."
 
 ## state/next-run.md — recommendations file format
 
-This is a reference section (not a runtime phase). The file is generated and committed in Phase 7 above; the file's contents are read in Pre-flight Step 5 of the next cycle.
+This is a reference section (not a runtime phase). The file is generated and committed in Phase 6 above; the file's contents are read in Pre-flight Step 5 of the next cycle.
 
 The recommendations file is the single source of truth for "what should the next run start from" — the prior cycle's NEXT STEPS bullets, expressed in a format the pre-flight loader can act on.
 
@@ -529,7 +477,7 @@ Issues flagged for review by THIS cycle (or earlier cycles, if they remain unres
 
 Reminders that don't change the next cycle's parameters but should be addressed before or alongside it.
 
-- <e.g., "Promote state/pinned-best.json's system_prompt.value to src/SecondBrain.Llm/Prompts/system_prompt.md and redeploy the MCP service.">
+- <e.g., "Pinned-best advanced. Copy state/pinned-best.json's system_prompt.value into %LOCALAPPDATA%\SecondBrainMcpServer\Prompts.local\system_prompt.md (admin), then restart SecondBrainHttpMcp.">
 - <e.g., "Regenerate test cases — index fingerprint has shifted from <old> to <new>.">
 - (omit the section if empty)
 
@@ -545,18 +493,15 @@ Optional free-form context: anything that doesn't fit the structured sections ab
 | Stopped on `iteration_cap` with positive delta > 0.02 | Tuning suggestions: `iteration-cap: <N+2>` |
 | Stopped on `plateau` | Tuning suggestions: `surface: <next surface to try>` |
 | Any items in FLAGGED FOR REVIEW | Carried-forward findings (one entry each) |
-| Phase 6 promoted a new prompt this cycle | Operational tasks: redeploy MCP service via `update.ps1` |
-| Phase 6 attempted promotion but reverted | Operational tasks: investigate why the pinned prompt failed to build |
+| Pinned-best advanced this cycle | Operational tasks: copy new pinned-best system_prompt.value to install dir's `Prompts.local/system_prompt.md` and restart the service (admin) |
 | Index fingerprint at run-time differs from active test-cases-v*.json | Operational tasks: regenerate test cases |
 | Verify regressed | Notes: warn that the previous cycle's fixes need review |
 
-The "promote pinned-best to production" reminder no longer appears in Operational tasks — that promotion now happens automatically in Phase 6 of every cycle. If the promotion was skipped (no diff), there's nothing to remind. If it was attempted, the redeploy reminder fires instead.
-
 ### When to write and commit it
 
-**Write the file in Phase 7**, before staging the improvements commit. Stage `state/next-run.md` alongside the findings doc and any code/test changes, so the file lands in the final commit — same commit that surfaces what was found. Single commit; no amend.
+**Write the file in Phase 6**, before staging the improvements commit. Stage `state/next-run.md` alongside the findings doc and any code/test changes, so the file lands in the final commit — same commit that surfaces what was found. Single commit; no amend.
 
-If Phase 7 would otherwise be skipped (no fixes AND no findings), still write `state/next-run.md` and commit it as the final commit. The cycle now always produces a final commit. Commit message:
+If Phase 6 would otherwise be skipped (no fixes AND no findings), still write `state/next-run.md` and commit it as the final commit. The cycle now always produces a final commit. Commit message:
 
 ```
 prompt-eval cycle <date>: no improvements; recommendations recorded for next run
@@ -570,7 +515,6 @@ The next cycle's pre-flight Step 5 reads this file.
 - **Phase 2 commit fails (e.g., signing)**: revert any state changes (`git checkout -- state/`), report and stop.
 - **Phase 4 build/test breaks after auto-fix**: revert the fix file-by-file, mark the category as flagged-for-review, continue.
 - **Phase 5 verify regresses**: do not commit improvements; print the regression and ask the user.
-- **Phase 6 build/test breaks after promotion**: revert system_prompt.md (`git checkout -- src/SecondBrain.Llm/Prompts/system_prompt.md`), record a "promotion failure" entry in the findings doc, skip the promotion commit, continue to Phase 7. The pinned-best.json still reflects the winner — the next cycle will retry promotion.
 - **No working tree initially**: abort in pre-flight.
 
 The cycle is idempotent: if it stops mid-way, the user can resolve the issue and re-invoke. The phases that already committed remain committed; subsequent phases pick up from a clean tree.

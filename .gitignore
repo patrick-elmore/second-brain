@@ -4,6 +4,14 @@ tmp/
 index/
 __pycache__/
 
+# .NET build artifacts
+**/bin/
+**/obj/
+publish/
+*.user
+*.suo
+.vs/
+
 # Claude Code runtime data (agent/skill/hook specs in .claude/ are committed)
 .claude/settings.local.json
 .claude/todos/

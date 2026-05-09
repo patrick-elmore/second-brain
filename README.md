@@ -477,10 +477,10 @@ The service runs as `LocalSystem` and only sees machine-scope env vars.
 
 ### Install (one-time)
 
-From an admin PowerShell at `.tools/second-brain-mcp/`:
+From an admin PowerShell at the repo root:
 
 ```powershell
-.\install.ps1
+.\scripts\install.ps1
 ```
 
 Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), copies `pricing.json` and `sources.json` (or `sources-template.json` as `sources.json` if you don't have a real one yet), registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
@@ -493,7 +493,7 @@ After install, you must:
 ### Update (after code changes)
 
 ```powershell
-.\update.ps1
+.\scripts\update.ps1
 ```
 
 Stops the service, rebuilds, redeploys, leaves config and index in place, restarts.
@@ -501,7 +501,7 @@ Stops the service, rebuilds, redeploys, leaves config and index in place, restar
 ### Uninstall
 
 ```powershell
-.\uninstall.ps1
+.\scripts\uninstall.ps1
 ```
 
 Stops and removes the service, prompts before deleting the install directory.
@@ -543,6 +543,18 @@ net start SecondBrainHttpMcp
 
 The persistent session reloads from `session-state.json` on start.
 
+### Manual prompt promotion
+
+The deployed service reads `system_prompt.md` from `%LOCALAPPDATA%\SecondBrainMcpServer\Prompts.local\` at process start. To push a new prompt — typically the winner from a `prompt-eval-cycle` run — overwrite that file and restart the service. From an admin PowerShell:
+
+```powershell
+jq -r '.system_prompt.value' src\SecondBrain.PromptEval\state\pinned-best.json `
+  | Out-File -Encoding UTF8 "$env:LOCALAPPDATA\SecondBrainMcpServer\Prompts.local\system_prompt.md"
+net stop SecondBrainHttpMcp; net start SecondBrainHttpMcp
+```
+
+The eval cycle deliberately does not auto-promote: the install-dir live file is owned by `LocalSystem` (the service account), and the cycle has no way to schedule the restart without elevating itself. `pinned-best.json` is the durable record of the best-known prompt across all cycles — promotion is just "make the running service match it."
+
 ### Alias mining
 
 The session's entity expansion table is the live `aliases.md` file in `src/SecondBrain.Llm/Prompts.local/` (gitignored — your real aliases never get committed). The repo ships a generic `Prompts/aliases-template.md` that the application copies to `Prompts.local/aliases.md` on first startup if no live file exists. The aliases map surface forms to canonical entities so the model can expand `Atlas` → `(Atlas OR "Project Atlas" OR atlas-svc)` before issuing any search.
@@ -555,7 +567,7 @@ The session's entity expansion table is the live `aliases.md` file in `src/Secon
     --output "$env:USERPROFILE\alias-mining"
 
 # Or from the repo during development:
-dotnet run --project .tools/second-brain-mcp/src/SecondBrain.AliasMiner -- `
+dotnet run --project src/SecondBrain.AliasMiner -- `
     --config "$env:LOCALAPPDATA\SecondBrainMcpServer\mcp_config.json" `
     --output ./alias-mining `
     --workers 5 --effort medium
@@ -566,7 +578,7 @@ Key flags: `--dry-run` (signals only, no LLM calls), `--clear-output` (wipe outp
 The miner opens `fts.db` read-only and writes only to its own output directory — the running service is unaffected. After review, promote the output:
 
 ```powershell
-cp alias-mining\candidates.md .tools\second-brain-mcp\src\SecondBrain.Llm\Prompts.local\aliases.md
+cp alias-mining\candidates.md src\SecondBrain.Llm\Prompts.local\aliases.md
 # Then restart the service to pick up the new aliases:
 net stop SecondBrainHttpMcp; net start SecondBrainHttpMcp
 ```
@@ -594,29 +606,31 @@ A staging copy lives at `.claude/skills/beta-brain/SKILL.md` in this repo. Edit-
 README.md                              this file
 LICENSE                                MIT
 
+second-brain-mcp.slnx                  .NET solution
+
 config/
   sources-template.json                generic example; copy to sources.json (gitignored) and edit
+  mcp_config.json                      service config template; copied to install dir on first install
+  pricing.json                         per-model USD pricing for cost tracking
+
+scripts/
+  install.ps1, update.ps1, uninstall.ps1
+
+src/
+  SecondBrain.Files/                   source folder enumeration, file reading, frontmatter parsing
+  SecondBrain.Index/                   FTS5 schema, search engine, RRF fuser, request history
+  SecondBrain.IndexBuilder/            console app: rebuild fts.db
+  SecondBrain.AliasMiner/              console app: mine candidate aliases from the corpus
+  SecondBrain.Llm/                     ClaudeSession, ToolLoop, Compactor
+    Prompts/                           system_prompt-template.md, aliases-template.md (committed)
+    Prompts.local/                     live system_prompt.md, aliases.md (gitignored)
+  SecondBrain.Mcp/                     ASP.NET Core host, MCP handler, /mcp + /health + /stats endpoints
+  SecondBrain.PromptEval/              prompt-tuning harness, scoring, test-case generation
+  SecondBrain.{Files,Index,Llm,Mcp,PromptEval}.Tests/  xUnit test projects
 
 .claude/
   agents/                              project-specific agent specs
   skills/beta-brain/SKILL.md           staging copy of the global /brain skill
-
-.tools/second-brain-mcp/               .NET solution
-  second-brain-mcp.slnx
-  install.ps1, update.ps1, uninstall.ps1
-  config/
-    mcp_config.json                    template; copied to install dir on first install
-    pricing.json                       per-model USD pricing for cost tracking
-  src/
-    SecondBrain.Files/                 source folder enumeration, file reading, frontmatter parsing
-    SecondBrain.Index/                 FTS5 schema, search engine, RRF fuser, request history
-    SecondBrain.IndexBuilder/          console app: rebuild fts.db
-    SecondBrain.AliasMiner/            console app: mine candidate aliases from the corpus
-    SecondBrain.Llm/                   ClaudeSession, ToolLoop, Compactor
-      Prompts/                         system_prompt-template.md, aliases-template.md (committed)
-      Prompts.local/                   live system_prompt.md, aliases.md (gitignored)
-    SecondBrain.Mcp/                   ASP.NET Core host, MCP handler, /mcp + /health + /stats endpoints
-    SecondBrain.{Files,Index,Llm,Mcp,PromptEval}.Tests/  xUnit test projects
 
 (install location, gitignored, machine-local)
 %LOCALAPPDATA%\SecondBrainMcpServer\

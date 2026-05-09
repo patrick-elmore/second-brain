@@ -1,9 +1,0 @@
-# Build artifacts
-**/bin/
-**/obj/
-publish/
-
-# Per-user files (Visual Studio)
-*.user
-*.suo
-.vs/

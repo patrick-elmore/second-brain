@@ -7,9 +7,10 @@
 $ErrorActionPreference = "Stop"
 
 $ScriptDir   = $PSScriptRoot
-$McpProj     = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.Mcp") "SecondBrain.Mcp.csproj"
-$BuilderProj = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.IndexBuilder") "SecondBrain.IndexBuilder.csproj"
-$MinerProj   = Join-Path (Join-Path (Join-Path $ScriptDir "src") "SecondBrain.AliasMiner") "SecondBrain.AliasMiner.csproj"
+$RepoRoot    = Split-Path $ScriptDir -Parent
+$McpProj     = Join-Path (Join-Path (Join-Path $RepoRoot "src") "SecondBrain.Mcp") "SecondBrain.Mcp.csproj"
+$BuilderProj = Join-Path (Join-Path (Join-Path $RepoRoot "src") "SecondBrain.IndexBuilder") "SecondBrain.IndexBuilder.csproj"
+$MinerProj   = Join-Path (Join-Path (Join-Path $RepoRoot "src") "SecondBrain.AliasMiner") "SecondBrain.AliasMiner.csproj"
 $InstallDir  = Join-Path $env:LOCALAPPDATA "SecondBrainMcpServer"
 $ConfigFile  = Join-Path $InstallDir "mcp_config.json"
 
@@ -37,7 +38,7 @@ dotnet publish $MinerProj --configuration Release --runtime win-x64 --self-conta
 if ($LASTEXITCODE -ne 0) { Write-Error "AliasMiner build failed."; exit 1 }
 
 # Refresh pricing.json from repo (reference data, always overwrite)
-$RepoPricingJson = Join-Path $ScriptDir "config" "pricing.json"
+$RepoPricingJson = Join-Path $RepoRoot "config" "pricing.json"
 $InstallConfigDir = Join-Path $InstallDir "config"
 if (-not (Test-Path $InstallConfigDir)) { New-Item -ItemType Directory -Path $InstallConfigDir -Force | Out-Null }
 Copy-Item $RepoPricingJson (Join-Path $InstallConfigDir "pricing.json") -Force
