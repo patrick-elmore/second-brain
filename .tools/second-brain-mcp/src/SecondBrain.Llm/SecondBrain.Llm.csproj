@@ -11,8 +11,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Prompts\system_prompt.md" />
-    <EmbeddedResource Include="Prompts\aliases.md" />
+    <None Include="Prompts\system_prompt-template.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Prompts\aliases-template.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

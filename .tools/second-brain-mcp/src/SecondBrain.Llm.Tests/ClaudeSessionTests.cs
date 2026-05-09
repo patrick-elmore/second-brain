@@ -291,8 +291,9 @@ public sealed class ClaudeSessionTests : IDisposable
         await session.AskAsync("Q?", null, "low", CancellationToken.None);
 
         var callJson = JsonSerializer.Serialize(fake.Calls[0]);
-        // The default system prompt mentions specific second-brain concepts
-        callJson.Should().Contain("second");
+        // The default system prompt resolves to SystemPrompt.Text (template + aliases).
+        // Sentinel from the template guaranteed to be present.
+        callJson.Should().Contain("knowledge retrieval assistant");
     }
 
     [Fact]

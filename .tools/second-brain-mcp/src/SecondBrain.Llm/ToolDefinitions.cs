@@ -44,9 +44,9 @@ internal static class ToolDefinitions
                         documents appearing high in multiple variants outrank documents that
                         appear in only one. Useful variant types:
                           - literal (user's terms with alias OR expansion)
-                          - phrase-quoted ("AWS Atlas")
-                          - NEAR-proximity (atlas NEAR/5 decision)
-                          - summary-targeted ({summary}: atlas)
+                          - phrase-quoted ("pricing change")
+                          - NEAR-proximity (pricing NEAR/5 decision)
+                          - summary-targeted ({summary}: pricing)
                           - path-hinted ({path}: standup)
                         Single-element array is fine for trivial lookups; multi-variant is the
                         default for anything conversational.

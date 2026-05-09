@@ -1,0 +1,19 @@
+[
+  {
+    "_comment": "This file is a generic template. The live system never reads it directly. On first install, install.ps1 copies this template to the install dir as config/sources.json (only if not already present). For local development, copy this file to config/sources.json (which is gitignored) and edit. The IndexBuilder reads the path you pass it on the command line.",
+    "_format": "Each entry has either { id, path, exclude_subfolders? } for static indexing or { id, discover: { root, directory_name, max_depth } } for walking a tree and indexing every directory matching directory_name."
+  },
+  {
+    "id": "example-static",
+    "path": "C:\\Users\\you\\Documents\\notes",
+    "exclude_subfolders": [".git", "node_modules"]
+  },
+  {
+    "id": "example-discover",
+    "discover": {
+      "root": "C:\\repos",
+      "directory_name": ".context",
+      "max_depth": 4
+    }
+  }
+]

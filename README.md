@@ -310,7 +310,7 @@ The model and effort are recorded in the response (`model_used`) and in `request
 
 ## Source configuration
 
-`config/sources.json` (in the repo root) defines what the IndexBuilder ingests. The same file is copied into the install dir's `config/` on first install, and the running service reads it from there.
+`config/sources.json` defines what the IndexBuilder ingests. The file is **personal data** and gitignored. The repo ships `config/sources-template.json` as a generic example; copy it to `config/sources.json` and edit to match your folders. (`install.ps1` will also copy the template into the install dir on first install if you don't already have a `sources.json` there.)
 
 Two entry shapes are supported:
 
@@ -319,7 +319,7 @@ Two entry shapes are supported:
 ```json
 {
   "id": "personal-notes",
-  "path": "C:\\data\\your-data\\obsidian\\notes",
+  "path": "C:\\Users\\you\\Documents\\notes",
   "exclude_subfolders": [".obsidian"]
 }
 ```
@@ -340,15 +340,6 @@ Indexes everything under `path`. Excluded subfolders are skipped at any depth.
 ```
 
 Walks `root` to `max_depth` directories deep, indexes every directory whose name matches `directory_name`. The same `id` is reused across every match — useful for grouping all `.context` folders across a workspace under one logical source.
-
-### Currently configured sources
-
-| ID | Type | Root |
-|---|---|---|
-| `repos-context` | discover `.context` | `C:\repos` |
-| `misc-context` | discover `.context` | `C:\misc` |
-| `your-data` | static (excludes `.obsidian`, `claude-docs`) | `C:\data\your-data` |
-| `wholesale-planning` | static (excludes `.tools`) | `C:\repos\your-planning-repo` |
 
 ---
 
@@ -464,9 +455,9 @@ Key fields:
 
 USD per 1M tokens, per Claude model, with both `standard` and `large_context` (>200K input tokens) tiers. Used by `PricingTable` to compute the cost numbers in `/stats`.
 
-### `config/sources.json` (versioned in repo)
+### `config/sources.json` (gitignored, personal)
 
-The source folder list — see [Source configuration](#source-configuration).
+The source folder list — see [Source configuration](#source-configuration). The repo ships a generic `config/sources-template.json`. Your real `sources.json` is gitignored and never published.
 
 ### Environment variables (machine scope)
 
@@ -492,7 +483,7 @@ From an admin PowerShell at `.tools/second-brain-mcp/`:
 .\install.ps1
 ```
 
-Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), copies `pricing.json` and `sources.json`, registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
+Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), copies `pricing.json` and `sources.json` (or `sources-template.json` as `sources.json` if you don't have a real one yet), registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
 
 After install, you must:
 1. Set `ANTHROPIC_API_KEY` (or the Vertex env vars) at machine scope.
@@ -554,9 +545,9 @@ The persistent session reloads from `session-state.json` on start.
 
 ### Alias mining
 
-The session's entity expansion table lives at `src/SecondBrain.Llm/Prompts/aliases.md` and is compiled into the service binary as an embedded resource. It maps surface forms to canonical entities so the model can expand `Anthony` → `(Anthony OR jane.public)` before issuing any search.
+The session's entity expansion table is the live `aliases.md` file in `src/SecondBrain.Llm/Prompts.local/` (gitignored — your real aliases never get committed). The repo ships a generic `Prompts/aliases-template.md` that the application copies to `Prompts.local/aliases.md` on first startup if no live file exists. The aliases map surface forms to canonical entities so the model can expand `Atlas` → `(Atlas OR "Project Atlas" OR atlas-svc)` before issuing any search.
 
-`SecondBrain.AliasMiner.exe` is a one-shot maintenance tool that mines candidate aliases from the live corpus and writes a reviewed `candidates.md` for promotion into `aliases.md`.
+`SecondBrain.AliasMiner.exe` is a one-shot maintenance tool that mines candidate aliases from the live corpus and writes a reviewed `candidates.md` for promotion into `Prompts.local/aliases.md`.
 
 ```powershell
 # From the install dir (after update.ps1):
@@ -575,9 +566,9 @@ Key flags: `--dry-run` (signals only, no LLM calls), `--clear-output` (wipe outp
 The miner opens `fts.db` read-only and writes only to its own output directory — the running service is unaffected. After review, promote the output:
 
 ```powershell
-cp alias-mining\candidates.md .tools\second-brain-mcp\src\SecondBrain.Llm\Prompts\aliases.md
-# Then rebuild and redeploy:
-.\update.ps1
+cp alias-mining\candidates.md .tools\second-brain-mcp\src\SecondBrain.Llm\Prompts.local\aliases.md
+# Then restart the service to pick up the new aliases:
+net stop SecondBrainHttpMcp; net start SecondBrainHttpMcp
 ```
 
 ---
@@ -601,12 +592,13 @@ A staging copy lives at `.claude/skills/beta-brain/SKILL.md` in this repo. Edit-
 
 ```
 README.md                              this file
-CLAUDE.md                              project-level guidance for Claude Code
+LICENSE                                MIT
 
 config/
-  sources.json                         source folder definitions
+  sources-template.json                generic example; copy to sources.json (gitignored) and edit
 
 .claude/
+  agents/                              project-specific agent specs
   skills/beta-brain/SKILL.md           staging copy of the global /brain skill
 
 .tools/second-brain-mcp/               .NET solution
@@ -620,9 +612,11 @@ config/
     SecondBrain.Index/                 FTS5 schema, search engine, RRF fuser, request history
     SecondBrain.IndexBuilder/          console app: rebuild fts.db
     SecondBrain.AliasMiner/            console app: mine candidate aliases from the corpus
-    SecondBrain.Llm/                   ClaudeSession, ToolLoop, Compactor, system prompts, aliases.md
+    SecondBrain.Llm/                   ClaudeSession, ToolLoop, Compactor
+      Prompts/                         system_prompt-template.md, aliases-template.md (committed)
+      Prompts.local/                   live system_prompt.md, aliases.md (gitignored)
     SecondBrain.Mcp/                   ASP.NET Core host, MCP handler, /mcp + /health + /stats endpoints
-    SecondBrain.{Files,Index,Llm}.Tests/  xUnit test projects
+    SecondBrain.{Files,Index,Llm,Mcp,PromptEval}.Tests/  xUnit test projects
 
 (install location, gitignored, machine-local)
 %LOCALAPPDATA%\SecondBrainMcpServer\
@@ -633,6 +627,8 @@ config/
   config/
     sources.json                       live source folder definitions
     pricing.json                       live pricing data
+  Prompts/                             system_prompt-template.md, aliases-template.md (shipped)
+  Prompts.local/                       live system_prompt.md, aliases.md (auto-bootstrapped)
   index/
     fts.db                             FTS5 content index
     requests.db                        request/response history

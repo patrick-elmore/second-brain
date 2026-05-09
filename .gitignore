@@ -9,3 +9,15 @@ __pycache__/
 .claude/todos/
 .claude/worktrees/
 .claude/*.jsonl
+
+# Project-level Claude Code instructions are personal and not part of the public repo
+CLAUDE.md
+
+# Live overrides for personal-data prompts and source-folder config.
+# Templates (system_prompt-template.md, aliases-template.md, sources-template.json) are committed;
+# the live files below are bootstrapped from those templates on first run, then user-edited.
+**/Prompts.local/
+config/sources.json
+
+# AliasMiner output (candidate aliases for review before promoting to aliases.md)
+alias-mining/
