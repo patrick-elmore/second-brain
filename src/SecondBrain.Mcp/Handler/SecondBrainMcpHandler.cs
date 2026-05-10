@@ -503,14 +503,14 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
                         switch (result.Outcome)
                         {
                             case SummarizationOutcome.Summarized:
-                                WriteSummary(row.Id, row.RelativePath, result.Summary!);
+                                WriteSummary(row.Id, row.RelativePath, result.Summary!, result.SourceType);
                                 Interlocked.Increment(ref processed);
                                 Interlocked.Increment(ref pageRetired);
                                 break;
 
                             case SummarizationOutcome.Skipped:
                                 // Permanent — write sentinel so the row exits the unsummarized list.
-                                WriteSummary(row.Id, row.RelativePath, SkipSentinel);
+                                WriteSummary(row.Id, row.RelativePath, SkipSentinel, sourceType: null);
                                 Interlocked.Increment(ref skippedPermanent);
                                 Interlocked.Increment(ref pageRetired);
                                 _logger.LogDebug("Permanently skipped id={Id} reason={Reason} path={Path}",
@@ -628,7 +628,7 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         return batches;
     }
 
-    private void WriteSummary(long id, string relPath, string summary)
+    private void WriteSummary(long id, string relPath, string summary, string? sourceType)
     {
         var connStr = new SqliteConnectionStringBuilder
         {
@@ -678,11 +678,20 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
             ins.ExecuteNonQuery();
         }
 
-        // Update files table
+        // Update files table — write source_type only when the summarizer chose
+        // a value (sourceType non-null). Skip-sentinel writes leave the column alone.
         using (var upd = conn.CreateCommand())
         {
             upd.Transaction = txn;
-            upd.CommandText = "UPDATE files SET summary = @summary WHERE id = @id";
+            if (sourceType != null)
+            {
+                upd.CommandText = "UPDATE files SET summary = @summary, source_type = @source_type WHERE id = @id";
+                upd.Parameters.AddWithValue("@source_type", sourceType);
+            }
+            else
+            {
+                upd.CommandText = "UPDATE files SET summary = @summary WHERE id = @id";
+            }
             upd.Parameters.AddWithValue("@summary", summary);
             upd.Parameters.AddWithValue("@id", id);
             upd.ExecuteNonQuery();

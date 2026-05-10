@@ -39,6 +39,7 @@
       "note": 8000,
       "default": 12000
     },
+    "source_types": ["transcript", "standup", "1on1", "planning", "note"],
 
     "search_max_snippet_tokens": 64,
     "search_per_variant_overfetch_min": 30,

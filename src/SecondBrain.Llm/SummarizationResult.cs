@@ -16,10 +16,11 @@ public sealed record SummarizationResult(
     long Id,
     SummarizationOutcome Outcome,
     string? Summary,
-    string? Reason)
+    string? Reason,
+    string? SourceType = null)
 {
-    public static SummarizationResult Ok(long id, string summary) =>
-        new(id, SummarizationOutcome.Summarized, summary, null);
+    public static SummarizationResult Ok(long id, string summary, string? sourceType = null) =>
+        new(id, SummarizationOutcome.Summarized, summary, null, sourceType);
 
     public static SummarizationResult Skip(long id, string reason) =>
         new(id, SummarizationOutcome.Skipped, null, reason);

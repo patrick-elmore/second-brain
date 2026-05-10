@@ -123,6 +123,19 @@ public sealed class SecondBrainSettings
     };
 
     /// <summary>
+    /// Single source of truth for the canonical set of content types. Injected
+    /// into the document summarizer's system prompt so the model picks one of
+    /// these values per document, and used to validate the model's response.
+    /// To add a new type, add it here — the summarizer prompt updates
+    /// automatically; no code changes required at the consumer.
+    /// </summary>
+    [JsonPropertyName("source_types")]
+    public List<string> SourceTypes { get; set; } = new()
+    {
+        "transcript", "standup", "1on1", "planning", "note",
+    };
+
+    /// <summary>
     /// Hard cap on the snippet token count requested by callers of search.
     /// Larger requests are clamped down to this value at the engine layer.
     /// </summary>

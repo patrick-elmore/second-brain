@@ -294,4 +294,86 @@ public sealed class DocumentSummarizerTests : IDisposable
         r.Reason.Should().Be("network error");
         r.Summary.Should().BeNull();
     }
+
+    // ── source-type extraction ────────────────────────────────────────────────
+
+    [Fact]
+    public void BatchSystemPrompt_DefaultTypes_ContainsCanonicalSet()
+    {
+        var summarizer = MakeSummarizer(new FakeMessageCreator());
+
+        summarizer.BatchSystemPrompt.Should().Contain("transcript, standup, 1on1, planning, note");
+    }
+
+    [Fact]
+    public void BatchSystemPrompt_CustomTypes_ContainsConfiguredList()
+    {
+        var summarizer = new DocumentSummarizer(
+            new FakeMessageCreator(),
+            sourceTypes: ["alpha", "beta", "release-retro"]);
+
+        summarizer.BatchSystemPrompt.Should().Contain("alpha, beta, release-retro");
+    }
+
+    [Fact]
+    public async Task SummarizeBatch_ResponseWithTypeLine_PropagatesTypeOnResult()
+    {
+        var fake = new FakeMessageCreator();
+        fake.EnqueueResponse(FakeMessageCreator.TextMessageJson(
+            "=====BEGIN:SUMMARY:1=====\ntype: transcript\nsummary: Engineer sync about ASO friction.\n=====END:SUMMARY:1====="));
+        var entry = MakeEntry("Engineer Sync.txt", new string('x', 500));
+        var summarizer = MakeSummarizer(fake);
+
+        var results = await summarizer.SummarizeBatchAsync([entry], CancellationToken.None);
+
+        results.Should().HaveCount(1);
+        results[0].SourceType.Should().Be("transcript");
+        results[0].Summary.Should().Contain("Engineer sync about ASO friction.");
+    }
+
+    [Fact]
+    public async Task SummarizeBatch_ResponseWithoutTypeLine_LeavesSourceTypeNull()
+    {
+        var fake = new FakeMessageCreator();
+        fake.EnqueueResponse(SummaryResponseJson(1, "Plain summary, no type line."));
+        var entry = MakeEntry("doc.md", new string('x', 500));
+        var summarizer = MakeSummarizer(fake);
+
+        var results = await summarizer.SummarizeBatchAsync([entry], CancellationToken.None);
+
+        results[0].SourceType.Should().BeNull();
+        results[0].Summary.Should().Contain("Plain summary, no type line.");
+    }
+
+    [Fact]
+    public async Task SummarizeBatch_ResponseWithUnknownType_DropsTypeKeepsSummary()
+    {
+        var fake = new FakeMessageCreator();
+        fake.EnqueueResponse(FakeMessageCreator.TextMessageJson(
+            "=====BEGIN:SUMMARY:1=====\ntype: invented-category\nsummary: Some prose.\n=====END:SUMMARY:1====="));
+        var entry = MakeEntry("doc.md", new string('x', 500));
+        // Default source types do not include "invented-category"
+        var summarizer = MakeSummarizer(fake);
+
+        var results = await summarizer.SummarizeBatchAsync([entry], CancellationToken.None);
+
+        results[0].SourceType.Should().BeNull();
+        results[0].Summary.Should().Contain("Some prose.");
+    }
+
+    [Fact]
+    public async Task SummarizeBatch_CustomSourceTypes_HonorsConfiguredValue()
+    {
+        var fake = new FakeMessageCreator();
+        fake.EnqueueResponse(FakeMessageCreator.TextMessageJson(
+            "=====BEGIN:SUMMARY:1=====\ntype: release-retro\nsummary: Retro content.\n=====END:SUMMARY:1====="));
+        var entry = MakeEntry("doc.md", new string('x', 500));
+        var summarizer = new DocumentSummarizer(
+            fake,
+            sourceTypes: ["transcript", "release-retro", "note"]);
+
+        var results = await summarizer.SummarizeBatchAsync([entry], CancellationToken.None);
+
+        results[0].SourceType.Should().Be("release-retro");
+    }
 }

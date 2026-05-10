@@ -234,6 +234,36 @@ public sealed class McpSettingsTests : IDisposable
     }
 
     [Fact]
+    public void SecondBrainSettings_DefaultSourceTypes_MatchesCanonicalFive()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.SourceTypes.Should().BeEquivalentTo(new[]
+        {
+            "transcript", "standup", "1on1", "planning", "note",
+        });
+    }
+
+    [Fact]
+    public void Load_ValidJson_OverridesSourceTypes()
+    {
+        var path = WriteConfig("""
+            {
+              "second_brain": {
+                "source_types": ["transcript", "note", "release-retro"]
+              }
+            }
+            """);
+
+        var settings = McpSettings.Load(path);
+
+        settings.SecondBrain.SourceTypes.Should().BeEquivalentTo(new[]
+        {
+            "transcript", "note", "release-retro",
+        });
+    }
+
+    [Fact]
     public void Load_ValidJson_OverridesSearchAndIndexAnomalyTunables()
     {
         var path = WriteConfig("""

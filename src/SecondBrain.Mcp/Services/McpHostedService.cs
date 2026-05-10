@@ -106,6 +106,7 @@ public sealed class McpHostedService : IHostedService
             contentBudgetChars: sb.SummarizerContentBudgetChars,
             maxOutputTokens: sb.BaseOutputTokens,
             inputCharLimits: sb.SummarizerInputCharLimits,
+            sourceTypes: sb.SourceTypes,
             logger: _logger,
             stats: statsTracker);
 
