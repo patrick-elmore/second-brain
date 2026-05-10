@@ -44,6 +44,18 @@ if (-not (Test-Path $InstallConfigDir)) { New-Item -ItemType Directory -Path $In
 Copy-Item $RepoPricingJson (Join-Path $InstallConfigDir "pricing.json") -Force
 Write-Host "pricing.json refreshed"
 
+# Promote system_prompt.md from repo (the tuned production prompt; always overwrite)
+$RepoPromptsLocal = Join-Path $RepoRoot "Prompts.local"
+$RepoSystemPrompt = Join-Path $RepoPromptsLocal "system_prompt.md"
+if (Test-Path $RepoSystemPrompt) {
+    $InstallPromptsLocal = Join-Path $InstallDir "Prompts.local"
+    if (-not (Test-Path $InstallPromptsLocal)) { New-Item -ItemType Directory -Path $InstallPromptsLocal -Force | Out-Null }
+    Copy-Item $RepoSystemPrompt (Join-Path $InstallPromptsLocal "system_prompt.md") -Force
+    Write-Host "system_prompt.md promoted from repo"
+} else {
+    Write-Host "No repo system_prompt.md found; deployed prompt unchanged"
+}
+
 Write-Host "Starting service '$ServiceName'..."
 net start $ServiceName
 
