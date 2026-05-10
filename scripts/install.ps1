@@ -64,11 +64,23 @@ if ($LASTEXITCODE -ne 0) { Write-Error "IndexBuilder build failed."; exit 1 }
 
 Write-Host "Build complete."
 
-# Copy config template on first install only
+# Copy mcp_config.json on first install only — prefer real one from repo config,
+# fall back to template. Subsequent installs preserve any local edits in the
+# install dir so production tuning isn't clobbered.
 $ConfigFile = Join-Path $InstallDir "mcp_config.json"
+$RepoMcpConfig    = Join-Path $ConfigDir "mcp_config.json"
+$RepoMcpTemplate  = Join-Path $ConfigDir "mcp_config-template.json"
 if (-not (Test-Path $ConfigFile)) {
-    Copy-Item (Join-Path $ConfigDir "mcp_config.json") $ConfigFile
-    Write-Host "Config template copied to $ConfigFile"
+    if (Test-Path $RepoMcpConfig) {
+        Copy-Item $RepoMcpConfig $ConfigFile
+        Write-Host "mcp_config.json copied from repo to $ConfigFile"
+    } elseif (Test-Path $RepoMcpTemplate) {
+        Copy-Item $RepoMcpTemplate $ConfigFile
+        Write-Host "mcp_config-template.json copied to $ConfigFile — review before starting the service"
+    } else {
+        Write-Error "No mcp_config.json or mcp_config-template.json found in $ConfigDir."
+        exit 1
+    }
 } else {
     Write-Host "Existing config preserved at $ConfigFile"
 }
