@@ -17,9 +17,7 @@ publish/
 .claude/todos/
 .claude/worktrees/
 .claude/*.jsonl
-
-# Project-level Claude Code instructions are personal and not part of the public repo
-CLAUDE.md
+.claude/*.lock
 
 # Live overrides for personal-data prompts and per-install config.
 # Templates (system_prompt-template.md, aliases-template.md, sources-template.json,
