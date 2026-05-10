@@ -9,12 +9,18 @@ public sealed class Compactor
 {
     private readonly IMessageCreator _client;
     private readonly string _compactionModel;
+    private readonly int _maxOutputTokens;
     private readonly IStatsRecorder? _stats;
 
-    public Compactor(IMessageCreator client, string compactionModel = "claude-sonnet-4-6", IStatsRecorder? stats = null)
+    public Compactor(
+        IMessageCreator client,
+        string compactionModel = "claude-sonnet-4-6",
+        int maxOutputTokens = 8_192,
+        IStatsRecorder? stats = null)
     {
         _client = client;
         _compactionModel = compactionModel;
+        _maxOutputTokens = maxOutputTokens;
         _stats = stats;
     }
 
@@ -31,7 +37,7 @@ public sealed class Compactor
         var response = await _client.CreateAsync(new MessageCreateParams
         {
             Model = _compactionModel,
-            MaxTokens = 8192,
+            MaxTokens = _maxOutputTokens,
             System = instruction,
             Messages =
             [

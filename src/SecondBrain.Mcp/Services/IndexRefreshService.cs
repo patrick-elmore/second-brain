@@ -94,12 +94,13 @@ public sealed class IndexRefreshService : BackgroundService
                         summary.Unchanged, summary.Skipped, summary.Elapsed);
                 }
 
-                if (changed > 200)
+                if (changed > _settings.SecondBrain.IndexAnomalyChangeThreshold)
                 {
                     _state.StatsTracker?.SetAnomalousRefresh(changed);
                     _logger.LogWarning(
-                        "Index auto-refresh: {Changed} files added/modified — exceeds anomaly threshold (200). Summarization blocked pending override.",
-                        changed);
+                        "Index auto-refresh: {Changed} files added/modified — exceeds anomaly threshold ({Threshold}). Summarization blocked pending override.",
+                        changed,
+                        _settings.SecondBrain.IndexAnomalyChangeThreshold);
                 }
                 else if (changed > 0)
                 {

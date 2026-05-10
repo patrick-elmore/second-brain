@@ -44,11 +44,22 @@ public sealed class ToolLoopTests : IDisposable
     private void BuildIndex()
         => new IndexBuilder().Build(_configPath, _ftsDb, 5_000_000);
 
+    // Constants used by tests that intentionally exercise the boundaries the
+    // production defaults set. Keep these in sync with the SecondBrainSettings
+    // defaults so a regression in defaults still shows up here.
+    private const int TestMaxToolTurns = 25;
+    private const int TestMaxReadFileBytes = 131_072;
+    private const long TestContextSoftLimitTokens = 150_000;
+
     private ToolLoop MakeLoop(FakeMessageCreator fake)
     {
         var engine = new SearchEngine(_ftsDb);
         var reader = new FileReader([_sourceDir]);
-        return new ToolLoop(fake, engine, reader);
+        return new ToolLoop(
+            fake, engine, reader,
+            maxToolTurns: TestMaxToolTurns,
+            maxReadFileBytes: TestMaxReadFileBytes,
+            contextSoftLimitTokens: TestContextSoftLimitTokens);
     }
 
     private static List<MessageParam> UserMessage(string text) =>
@@ -103,7 +114,7 @@ public sealed class ToolLoopTests : IDisposable
     // ── search tool ───────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task RunAsync_SearchToolUse_SearchRunsAndHitsAddedToFilesReferenced()
+    public async Task RunAsync_SearchToolUse_FilesReferencedNotPopulatedBySearchHits()
     {
         WriteSource("data.md", "quantum entanglement physics research");
         BuildIndex();
@@ -119,7 +130,7 @@ public sealed class ToolLoopTests : IDisposable
         var result = await loop.RunAsync(UserMessage("What do you know about quantum?"), "haiku", Effort.Low, CancellationToken.None);
 
         result.ToolsCalled.Should().Be(1);
-        result.FilesReferenced.Should().NotBeEmpty();
+        result.FilesReferenced.Should().BeEmpty(); // search hits do not populate FilesReferenced; only read_file calls do
         fake.Calls.Should().HaveCount(2);
     }
 
@@ -225,7 +236,7 @@ public sealed class ToolLoopTests : IDisposable
         var fake = new FakeMessageCreator();
         // Queue MaxToolTurns + 1 tool-use responses, then a final text response.
         // The cap injects a forcing message; the next response should be the final synthesis.
-        for (var i = 0; i < ToolLoop.MaxToolTurns; i++)
+        for (var i = 0; i < TestMaxToolTurns; i++)
             fake.EnqueueToolUse($"tu{i}", "search", """{"queries":["alpha"]}""");
         fake.EnqueueText("Synthesis after forced stop.");
 
@@ -234,7 +245,7 @@ public sealed class ToolLoopTests : IDisposable
         var result = await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
 
         result.Synthesis.Should().Be("Synthesis after forced stop.");
-        result.ToolsCalled.Should().Be(ToolLoop.MaxToolTurns);
+        result.ToolsCalled.Should().Be(TestMaxToolTurns);
     }
 
     // ── read_file error guidance ──────────────────────────────────────────────
@@ -365,7 +376,7 @@ public sealed class ToolLoopTests : IDisposable
     public async Task RunAsync_ReadFileLargerThanCap_ContentTruncatedWithMarker()
     {
         // File larger than the cap: should be truncated, marker appended.
-        var bigContent = new string('x', ToolLoop.MaxReadFileBytes + 5_000);
+        var bigContent = new string('x', TestMaxReadFileBytes + 5_000);
         WriteSource("big.md", bigContent);
         BuildIndex();
 
@@ -416,7 +427,7 @@ public sealed class ToolLoopTests : IDisposable
         // Loop should then force synthesis on the next call by omitting Tools.
         var fake = new FakeMessageCreator();
         fake.EnqueueToolUse("tu1", "search", """{"queries":["alpha"]}""",
-            inputTokens: (int)ToolLoop.ContextSoftLimitTokens + 1_000);
+            inputTokens: (int)TestContextSoftLimitTokens + 1_000);
         fake.EnqueueText("Final answer after forced synthesis.");
 
         var loop = MakeLoop(fake);
@@ -504,5 +515,29 @@ public sealed class ToolLoopTests : IDisposable
         var result = await loop.RunAsync(UserMessage("Check doc."), "haiku", Effort.Low, CancellationToken.None);
 
         result.ToolsCalled.Should().Be(2);
+    }
+
+    // ── ctor overrides ────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_MaxToolTurnsOverride_HonoredByLoop()
+    {
+        BuildIndex();
+        var fake = new FakeMessageCreator();
+        // 3-turn cap: 3 tool-use responses, then forced synthesis on the 4th call.
+        for (var i = 0; i < 3; i++)
+            fake.EnqueueToolUse($"tu{i}", "search", """{"queries":["alpha"]}""");
+        fake.EnqueueText("Synthesis after override cap.");
+
+        var engine = new SearchEngine(_ftsDb);
+        var reader = new FileReader([_sourceDir]);
+        var loop = new ToolLoop(fake, engine, reader, maxToolTurns: 3);
+
+        var result = await loop.RunAsync(UserMessage("Q"), "haiku", Effort.Low, CancellationToken.None);
+
+        result.Synthesis.Should().Be("Synthesis after override cap.");
+        result.ToolsCalled.Should().Be(3);
+        // The 4th call must have no tools — forced synthesis after the override cap.
+        fake.Calls[3].Tools.Should().BeNull();
     }
 }

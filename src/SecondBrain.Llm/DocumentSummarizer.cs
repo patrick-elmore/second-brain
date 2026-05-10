@@ -17,23 +17,50 @@ namespace SecondBrain.Llm;
 /// </summary>
 public sealed class DocumentSummarizer
 {
-    /// <summary>Maximum chars of document content per API call (≈20K tokens).</summary>
-    public const int ContentBudgetChars = 80_000;
+    /// <summary>
+    /// Default per-source-type input char limits, used when no override dict
+    /// is supplied. Mirrors the historical hardcoded switch.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, int> DefaultInputCharLimits =
+        new Dictionary<string, int>
+        {
+            ["1on1"] = 24_000,
+            ["transcript"] = 20_000,
+            ["standup"] = 6_000,
+            ["planning"] = 16_000,
+            ["note"] = 8_000,
+            ["default"] = 12_000,
+        };
 
     private readonly IMessageCreator _client;
     private readonly ILogger _logger;
     private readonly IStatsRecorder? _stats;
+    private readonly int _contentBudgetChars;
+    private readonly int _maxOutputTokens;
+    private readonly IReadOnlyDictionary<string, int> _inputCharLimits;
+
+    /// <summary>Maximum chars of document content per API call.</summary>
+    public int ContentBudgetChars => _contentBudgetChars;
 
     // Regex to extract SUMMARY blocks: =====BEGIN:SUMMARY:N=====\n...\n=====END:SUMMARY:N=====
     private static readonly Regex SummaryPattern = new(
         @"={5}BEGIN:SUMMARY:(\d+)={5}\s*(.*?)\s*={5}END:SUMMARY:\1={5}",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
-    public DocumentSummarizer(IMessageCreator client, ILogger? logger = null, IStatsRecorder? stats = null)
+    public DocumentSummarizer(
+        IMessageCreator client,
+        int contentBudgetChars = 80_000,
+        int maxOutputTokens = 8_192,
+        IReadOnlyDictionary<string, int>? inputCharLimits = null,
+        ILogger? logger = null,
+        IStatsRecorder? stats = null)
     {
         _client = client;
         _logger = logger ?? NullLogger.Instance;
         _stats = stats;
+        _contentBudgetChars = contentBudgetChars;
+        _maxOutputTokens = maxOutputTokens;
+        _inputCharLimits = inputCharLimits ?? DefaultInputCharLimits;
     }
 
     /// <summary>
@@ -80,7 +107,7 @@ public sealed class DocumentSummarizer
 
         // Build user message — one block per doc
         var userMsg = BuildUserMessage(prepared);
-        var maxTokens = Math.Min(prepared.Count * 500, 8192);
+        var maxTokens = Math.Min(prepared.Count * 500, _maxOutputTokens);
 
         var systemBlocks = new List<TextBlockParam>
         {
@@ -250,16 +277,15 @@ public sealed class DocumentSummarizer
 
     // ── Type strategy ─────────────────────────────────────────────────────────
 
-    public static int InputCharLimit(string? sourceType) =>
-        sourceType?.ToLowerInvariant() switch
-        {
-            "1on1" => 24_000,
-            "transcript" => 20_000,
-            "standup" => 6_000,
-            "planning" => 16_000,
-            "note" => 8_000,
-            _ => 12_000,
-        };
+    public int InputCharLimit(string? sourceType)
+    {
+        var key = sourceType?.ToLowerInvariant();
+        if (key != null && _inputCharLimits.TryGetValue(key, out var v))
+            return v;
+        if (_inputCharLimits.TryGetValue("default", out var defaultValue))
+            return defaultValue;
+        return 12_000;
+    }
 
     // ── System prompt (cached) ────────────────────────────────────────────────
 

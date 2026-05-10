@@ -65,7 +65,11 @@ public sealed class McpHostedService : IHostedService
         var fileReader = new FileReader(allowedRoots);
 
         // Build index layer
-        var searchEngine = new SearchEngine(ftsDbPath);
+        var searchEngine = new SearchEngine(
+            ftsDbPath,
+            maxSnippetTokens: sb.SearchMaxSnippetTokens,
+            perVariantOverfetchMin: sb.SearchPerVariantOverfetchMin,
+            perVariantOverfetchMax: sb.SearchPerVariantOverfetchMax);
         var requestHistory = new SecondBrain.Index.RequestHistory.RequestHistory(requestsDbPath);
 
         // Build LLM layer
@@ -85,6 +89,10 @@ public sealed class McpHostedService : IHostedService
             escalationModel: sb.EscalationModel,
             compactThresholdTokens: sb.CompactThresholdTokens,
             persistEveryNMessages: sb.StatePersistEveryNMessages,
+            maxToolTurns: sb.MaxToolTurns,
+            maxReadFileBytes: sb.MaxReadFileBytes,
+            baseOutputTokens: sb.BaseOutputTokens,
+            compactorMaxOutputTokens: sb.CompactorMaxOutputTokens,
             vertexBaseUrl: sb.VertexBaseUrl,
             logger: _logger,
             stats: statsTracker);
@@ -93,7 +101,13 @@ public sealed class McpHostedService : IHostedService
         // separate instance so it doesn't share state with the session client).
         var summarizerRawClient = ClaudeSessionFactory.BuildClient(apiKey, sb.VertexBaseUrl);
         var summarizerClient = new AnthropicMessageCreator(summarizerRawClient);
-        var summarizer = new DocumentSummarizer(summarizerClient, _logger, statsTracker);
+        var summarizer = new DocumentSummarizer(
+            summarizerClient,
+            contentBudgetChars: sb.SummarizerContentBudgetChars,
+            maxOutputTokens: sb.BaseOutputTokens,
+            inputCharLimits: sb.SummarizerInputCharLimits,
+            logger: _logger,
+            stats: statsTracker);
 
         var handler = new SecondBrainMcpHandler(
             session: session,

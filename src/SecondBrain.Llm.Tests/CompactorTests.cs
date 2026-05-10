@@ -8,7 +8,7 @@ namespace SecondBrain.Llm.Tests;
 public sealed class CompactorTests
 {
     private static Compactor MakeCompactor(FakeMessageCreator fake, IStatsRecorder? stats = null)
-        => new(fake, "claude-sonnet-4-6", stats);
+        => new(fake, "claude-sonnet-4-6", stats: stats);
 
     private static List<MessageParam> TwoMessages() =>
     [

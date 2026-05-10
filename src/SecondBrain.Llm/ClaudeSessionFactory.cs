@@ -19,13 +19,17 @@ public static class ClaudeSessionFactory
         string escalationModel = "claude-sonnet-4-6",
         long compactThresholdTokens = 150_000,
         int persistEveryNMessages = 5,
+        int maxToolTurns = 25,
+        int maxReadFileBytes = 131_072,
+        int baseOutputTokens = 8_192,
+        int compactorMaxOutputTokens = 8_192,
         string? vertexBaseUrl = null,
         ILogger? logger = null,
         IStatsRecorder? stats = null)
     {
         var rawClient = BuildClient(apiKey, vertexBaseUrl);
         var client = new AnthropicMessageCreator(rawClient);
-        var compactor = new Compactor(client, escalationModel, stats);
+        var compactor = new Compactor(client, escalationModel, compactorMaxOutputTokens, stats);
         var statePersistence = new StatePersistence(statePath, stateBackupCount);
 
         return new ClaudeSession(
@@ -38,6 +42,9 @@ public static class ClaudeSessionFactory
             escalationModel: escalationModel,
             compactThresholdTokens: compactThresholdTokens,
             persistEveryNMessages: persistEveryNMessages,
+            maxToolTurns: maxToolTurns,
+            maxReadFileBytes: maxReadFileBytes,
+            baseOutputTokens: baseOutputTokens,
             logger: logger,
             stats: stats);
     }

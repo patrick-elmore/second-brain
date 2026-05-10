@@ -28,43 +28,55 @@ internal sealed class ToolLoop
     private readonly ILogger _logger;
     private readonly IStatsRecorder? _stats;
 
-    public ToolLoop(IMessageCreator client, SearchEngine searchEngine, FileReader fileReader, ILogger? logger = null, IStatsRecorder? stats = null)
-    {
-        _client = client;
-        _searchEngine = searchEngine;
-        _fileReader = fileReader;
-        _logger = logger ?? NullLogger.Instance;
-        _stats = stats;
-    }
-
     /// <summary>
     /// Hard cap on tool-use turns within a single ask. Each turn appends the
     /// model's response and the tool results to the message history; without a
     /// cap, a model that keeps calling tools can spiral past the 200K-token
-    /// context limit and crash the request. Surfaced by the prompt-eval harness
-    /// when one test case hit 208K tokens.
+    /// context limit and crash the request.
     /// </summary>
-    public const int MaxToolTurns = 25;
+    private readonly int _maxToolTurns;
 
     /// <summary>
     /// Per-call cap on the size of a read_file response. Larger files are
-    /// truncated with a marker. ~32 KB encodes to roughly 8K tokens — large
-    /// enough to be useful for a focused read, small enough that even several
-    /// reads within a single ask cannot dominate the 200K context window.
-    /// Surfaced by the prompt-eval harness: tc_014 plus three other cases hit
-    /// the 200K limit even with MaxToolTurns enforced, because each read of a
-    /// large file ate ~25K tokens at a time.
+    /// truncated with a marker.
     /// </summary>
-    public const int MaxReadFileBytes = 32_768;
+    private readonly int _maxReadFileBytes;
 
     /// <summary>
     /// Soft cap on input tokens reported by the API. Once a single API call
     /// reports input_tokens above this threshold, the loop forces synthesis
-    /// on the next call (omitting tools) instead of letting the conversation
-    /// keep growing toward the 200K hard limit. Leaves a ~50K-token buffer
-    /// for the synthesis call itself.
+    /// on the next call (omitting tools). Sourced from the same setting as
+    /// the session-level compact threshold — they serve the same purpose.
     /// </summary>
-    public const long ContextSoftLimitTokens = 150_000;
+    private readonly long _contextSoftLimitTokens;
+
+    /// <summary>
+    /// Base output token budget passed to <see cref="EffortConfig"/> when resolving
+    /// per-call MaxTokens. Each effort tier adds a thinking budget on top.
+    /// </summary>
+    private readonly int _baseOutputTokens;
+
+    public ToolLoop(
+        IMessageCreator client,
+        SearchEngine searchEngine,
+        FileReader fileReader,
+        int maxToolTurns = 25,
+        int maxReadFileBytes = 131_072,
+        long contextSoftLimitTokens = 150_000,
+        int baseOutputTokens = 8_192,
+        ILogger? logger = null,
+        IStatsRecorder? stats = null)
+    {
+        _client = client;
+        _searchEngine = searchEngine;
+        _fileReader = fileReader;
+        _maxToolTurns = maxToolTurns;
+        _maxReadFileBytes = maxReadFileBytes;
+        _contextSoftLimitTokens = contextSoftLimitTokens;
+        _baseOutputTokens = baseOutputTokens;
+        _logger = logger ?? NullLogger.Instance;
+        _stats = stats;
+    }
 
     public async Task<ToolLoopResult> RunAsync(
         List<MessageParam> messages,
@@ -100,7 +112,7 @@ internal sealed class ToolLoop
             // Effort tier maps to Thinking budget + scaled MaxTokens. The earlier
             // OutputConfig.Effort path was silently dropped on Vertex; Thinking is
             // a standard API field and works on both Vertex and direct API.
-            var (thinking, maxTokens) = EffortConfig.Resolve(apiEffort);
+            var (thinking, maxTokens) = EffortConfig.Resolve(apiEffort, _baseOutputTokens);
 
             var createParams = new MessageCreateParams
             {
@@ -204,19 +216,19 @@ internal sealed class ToolLoop
             // reached, or context approaching the hard 200K limit. Either way,
             // we set the flag and let the next iteration omit Tools so the
             // model produces a final text response.
-            if (toolTurns >= MaxToolTurns)
+            if (toolTurns >= _maxToolTurns)
             {
                 _logger.LogWarning(
                     "Tool loop reached MaxToolTurns={Cap}; forcing synthesis on next call.",
-                    MaxToolTurns);
+                    _maxToolTurns);
                 forceSynthesis = true;
             }
-            else if (response.Usage.InputTokens >= ContextSoftLimitTokens)
+            else if (response.Usage.InputTokens >= _contextSoftLimitTokens)
             {
                 _logger.LogWarning(
                     "Tool loop input reached {Tokens} tokens (soft limit {Limit}); forcing synthesis on next call to avoid 200K hard cap.",
                     response.Usage.InputTokens,
-                    ContextSoftLimitTokens);
+                    _contextSoftLimitTokens);
                 forceSynthesis = true;
             }
         }
@@ -267,9 +279,6 @@ internal sealed class ToolLoop
         var result = queries.Count > 0
             ? _searchEngine.SearchMulti(queries, baseParams)
             : _searchEngine.Search(baseParams); // filter-only fallthrough
-
-        foreach (var hit in result.Hits)
-            filesThisTurn.Add(hit.AbsolutePath);
 
         return SerializeSearchResult(result);
     }
@@ -447,13 +456,13 @@ internal sealed class ToolLoop
         }
     }
 
-    private static string TruncateForToolResult(string content)
+    private string TruncateForToolResult(string content)
     {
-        if (content.Length <= MaxReadFileBytes)
+        if (content.Length <= _maxReadFileBytes)
             return content;
 
-        return content.Substring(0, MaxReadFileBytes) +
-               $"\n\n[truncated: file is {content.Length} bytes; returned first {MaxReadFileBytes}. " +
+        return content.Substring(0, _maxReadFileBytes) +
+               $"\n\n[truncated: file is {content.Length} bytes; returned first {_maxReadFileBytes}. " +
                "Run `search` with more specific terms to locate the section you need, " +
                "or read a different file.]";
     }

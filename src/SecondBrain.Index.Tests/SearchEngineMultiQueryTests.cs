@@ -170,4 +170,23 @@ public sealed class SearchEngineMultiQueryTests : IDisposable
                 result.Hits[i].Score.Should().BeGreaterThanOrEqualTo(result.Hits[i + 1].Score);
         }
     }
+
+    [Fact]
+    public void Search_MaxSnippetTokensOverride_ClampsCallerRequest()
+    {
+        // Long content so the snippet can be measurable.
+        WriteSource("long.md", string.Join(' ', Enumerable.Repeat("alpha", 200)));
+        BuildIndex();
+
+        // Engine constructed with maxSnippetTokens=8; caller asks for 100.
+        var engine = new SearchEngine(_ftsDb, maxSnippetTokens: 8);
+        var result = engine.Search(new SearchParams(Query: "alpha", SnippetTokens: 100, Top: 1));
+
+        result.Hits.Should().HaveCount(1);
+        var snippet = result.Hits[0].Matches[0].Snippet;
+        // SQLite's snippet() returns the requested tokens trimmed; ensure the
+        // trimmed snippet has roughly the cap-many tokens (allowing ellipsis).
+        var tokenCount = snippet.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        tokenCount.Should().BeLessThanOrEqualTo(10); // 8 + a couple of marker tokens
+    }
 }

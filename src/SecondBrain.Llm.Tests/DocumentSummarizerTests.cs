@@ -209,9 +209,26 @@ public sealed class DocumentSummarizerTests : IDisposable
     [InlineData("note", 8_000)]
     [InlineData(null, 12_000)]
     [InlineData("unknown_type", 12_000)]
-    public void InputCharLimit_ReturnsDocumentedValues(string? sourceType, int expectedLimit)
+    public void InputCharLimit_DefaultDict_ReturnsDocumentedValues(string? sourceType, int expectedLimit)
     {
-        DocumentSummarizer.InputCharLimit(sourceType).Should().Be(expectedLimit);
+        var summarizer = MakeSummarizer(new FakeMessageCreator());
+
+        summarizer.InputCharLimit(sourceType).Should().Be(expectedLimit);
+    }
+
+    [Fact]
+    public void InputCharLimit_OverrideDict_HonoredForKnownAndUnknownTypes()
+    {
+        var fake = new FakeMessageCreator();
+        var customLimits = new Dictionary<string, int>
+        {
+            ["1on1"] = 1234,
+            ["default"] = 5678,
+        };
+        var summarizer = new DocumentSummarizer(fake, inputCharLimits: customLimits);
+
+        summarizer.InputCharLimit("1on1").Should().Be(1234);
+        summarizer.InputCharLimit("anything-else").Should().Be(5678);
     }
 
     // ── prefix construction ───────────────────────────────────────────────────

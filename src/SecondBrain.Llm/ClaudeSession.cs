@@ -41,6 +41,9 @@ public sealed class ClaudeSession
         string escalationModel = "claude-sonnet-4-6",
         long compactThresholdTokens = 150_000,
         int persistEveryNMessages = 5,
+        int maxToolTurns = 25,
+        int maxReadFileBytes = 131_072,
+        int baseOutputTokens = 8_192,
         ILogger? logger = null,
         IStatsRecorder? stats = null)
     {
@@ -52,7 +55,16 @@ public sealed class ClaudeSession
         _compactThresholdTokens = compactThresholdTokens;
         _persistEveryNMessages = persistEveryNMessages;
         _sessionLogger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
-        _toolLoop = new ToolLoop(client, searchEngine, fileReader, logger, stats);
+        // The tool loop's context soft limit is sourced from the session's compact
+        // threshold — they describe the same context-pressure boundary.
+        _toolLoop = new ToolLoop(
+            client, searchEngine, fileReader,
+            maxToolTurns: maxToolTurns,
+            maxReadFileBytes: maxReadFileBytes,
+            contextSoftLimitTokens: compactThresholdTokens,
+            baseOutputTokens: baseOutputTokens,
+            logger: logger,
+            stats: stats);
 
         RestoreState();
     }

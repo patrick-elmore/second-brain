@@ -101,10 +101,157 @@ public sealed class McpSettingsTests : IDisposable
     }
 
     [Fact]
-    public void SecondBrainSettings_DefaultIndexMaxBytes_Is5M()
+    public void SecondBrainSettings_DefaultIndexMaxBytes_Is500K()
     {
         var settings = new SecondBrainSettings();
 
-        settings.IndexMaxBytes.Should().Be(5_000_000);
+        settings.IndexMaxBytes.Should().Be(500_000);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultMaxToolTurns_Is25()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.MaxToolTurns.Should().Be(25);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultMaxReadFileBytes_Is128K()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.MaxReadFileBytes.Should().Be(131_072);
+    }
+
+    [Fact]
+    public void Load_ValidJson_OverridesGroupATunables()
+    {
+        var path = WriteConfig("""
+            {
+              "second_brain": {
+                "max_tool_turns": 50,
+                "max_read_file_bytes": 65536
+              }
+            }
+            """);
+
+        var settings = McpSettings.Load(path);
+
+        settings.SecondBrain.MaxToolTurns.Should().Be(50);
+        settings.SecondBrain.MaxReadFileBytes.Should().Be(65_536);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultBaseOutputTokens_Is8K()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.BaseOutputTokens.Should().Be(8_192);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultCompactorMaxOutputTokens_Is8K()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.CompactorMaxOutputTokens.Should().Be(8_192);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultSummarizerContentBudgetChars_Is80K()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.SummarizerContentBudgetChars.Should().Be(80_000);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultSummarizerInputCharLimits_MatchesHistoricalSwitch()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.SummarizerInputCharLimits.Should().BeEquivalentTo(new Dictionary<string, int>
+        {
+            ["1on1"] = 24_000,
+            ["transcript"] = 20_000,
+            ["standup"] = 6_000,
+            ["planning"] = 16_000,
+            ["note"] = 8_000,
+            ["default"] = 12_000,
+        });
+    }
+
+    [Fact]
+    public void Load_ValidJson_OverridesSummarizerLimits()
+    {
+        var path = WriteConfig("""
+            {
+              "second_brain": {
+                "base_output_tokens": 4096,
+                "compactor_max_output_tokens": 16384,
+                "summarizer_content_budget_chars": 100000,
+                "summarizer_input_char_limits": {
+                  "transcript": 30000,
+                  "default": 5000
+                }
+              }
+            }
+            """);
+
+        var settings = McpSettings.Load(path);
+
+        settings.SecondBrain.BaseOutputTokens.Should().Be(4096);
+        settings.SecondBrain.CompactorMaxOutputTokens.Should().Be(16384);
+        settings.SecondBrain.SummarizerContentBudgetChars.Should().Be(100_000);
+        settings.SecondBrain.SummarizerInputCharLimits["transcript"].Should().Be(30_000);
+        settings.SecondBrain.SummarizerInputCharLimits["default"].Should().Be(5_000);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultSearchMaxSnippetTokens_Is64()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.SearchMaxSnippetTokens.Should().Be(64);
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultSearchPerVariantOverfetchBounds_Are30And50()
+    {
+        var settings = new SecondBrainSettings();
+
+        (settings.SearchPerVariantOverfetchMin, settings.SearchPerVariantOverfetchMax)
+            .Should().Be((30, 50));
+    }
+
+    [Fact]
+    public void SecondBrainSettings_DefaultIndexAnomalyChangeThreshold_Is200()
+    {
+        var settings = new SecondBrainSettings();
+
+        settings.IndexAnomalyChangeThreshold.Should().Be(200);
+    }
+
+    [Fact]
+    public void Load_ValidJson_OverridesSearchAndIndexAnomalyTunables()
+    {
+        var path = WriteConfig("""
+            {
+              "second_brain": {
+                "search_max_snippet_tokens": 16,
+                "search_per_variant_overfetch_min": 10,
+                "search_per_variant_overfetch_max": 100,
+                "index_anomaly_change_threshold": 500
+              }
+            }
+            """);
+
+        var settings = McpSettings.Load(path);
+
+        settings.SecondBrain.SearchMaxSnippetTokens.Should().Be(16);
+        settings.SecondBrain.SearchPerVariantOverfetchMin.Should().Be(10);
+        settings.SecondBrain.SearchPerVariantOverfetchMax.Should().Be(100);
+        settings.SecondBrain.IndexAnomalyChangeThreshold.Should().Be(500);
     }
 }

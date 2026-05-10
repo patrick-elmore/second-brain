@@ -6,10 +6,20 @@ namespace SecondBrain.Index.Search;
 public sealed class SearchEngine
 {
     private readonly string _dbPath;
+    private readonly int _maxSnippetTokens;
+    private readonly int _perVariantOverfetchMin;
+    private readonly int _perVariantOverfetchMax;
 
-    public SearchEngine(string dbPath)
+    public SearchEngine(
+        string dbPath,
+        int maxSnippetTokens = 64,
+        int perVariantOverfetchMin = 30,
+        int perVariantOverfetchMax = 50)
     {
         _dbPath = dbPath;
+        _maxSnippetTokens = maxSnippetTokens;
+        _perVariantOverfetchMin = perVariantOverfetchMin;
+        _perVariantOverfetchMax = perVariantOverfetchMax;
     }
 
     public SearchResult Search(SearchParams p)
@@ -26,7 +36,7 @@ public sealed class SearchEngine
         using var conn = new SqliteConnection(connStr);
         conn.Open();
 
-        var snipTokens = Math.Clamp(p.SnippetTokens, 1, 64);
+        var snipTokens = Math.Clamp(p.SnippetTokens, 1, _maxSnippetTokens);
         var filter = BuildFilter(p);
         IReadOnlyList<SearchHit> hits;
         try
@@ -74,7 +84,7 @@ public sealed class SearchEngine
             return Search(baseParams); // fall through to filter-only path
 
         // Overfetch per variant so the fuser has enough material to find consensus.
-        var perVariantTop = Math.Clamp(baseParams.Top * 2, 30, 50);
+        var perVariantTop = Math.Clamp(baseParams.Top * 2, _perVariantOverfetchMin, _perVariantOverfetchMax);
 
         var perVariantLists = new List<IReadOnlyList<SearchHit>>(cleaned.Count);
         foreach (var q in cleaned)

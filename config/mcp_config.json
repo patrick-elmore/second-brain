@@ -22,8 +22,29 @@
     "state_persist_every_n_messages": 5,
     "state_backup_count": 5,
 
-    "index_max_bytes": 5000000,
+    "index_max_bytes": 500000,
     "index_refresh_interval_seconds": 3600,
+
+    "max_tool_turns": 25,
+    "max_read_file_bytes": 131072,
+    "base_output_tokens": 8192,
+    "compactor_max_output_tokens": 8192,
+
+    "summarizer_content_budget_chars": 80000,
+    "summarizer_input_char_limits": {
+      "1on1": 24000,
+      "transcript": 20000,
+      "standup": 6000,
+      "planning": 16000,
+      "note": 8000,
+      "default": 12000
+    },
+
+    "search_max_snippet_tokens": 64,
+    "search_per_variant_overfetch_min": 30,
+    "search_per_variant_overfetch_max": 50,
+
+    "index_anomaly_change_threshold": 200,
 
     "vertex_base_url": "",
 

@@ -371,7 +371,7 @@ CREATE VIRTUAL TABLE files_fts USING fts5(
 );
 ```
 
-Built by `SecondBrain.IndexBuilder.exe` in a single transaction. Files larger than 5 MB and binary files are skipped. The `summary` column is `NULL` at index time and populated separately by `generate_summaries`.
+Built by `SecondBrain.IndexBuilder.exe` in a single transaction. Files larger than `index_max_bytes` (default 500 KB) and binary files are skipped. The `summary` column is `NULL` at index time and populated separately by `generate_summaries`.
 
 ### Frontmatter parsing
 
@@ -434,37 +434,104 @@ Beyond the MCP JSON-RPC endpoint, the service exposes three GETs for diagnostics
 
 ### Templates and live overrides
 
-Three personal-data files use the same template/local pattern so the public repo never carries personal content:
+Four personal-data files use the same template/local pattern so the public repo never carries personal content:
 
 | Live file (gitignored) | Template (committed) | Bootstrap |
 |---|---|---|
+| `config/mcp_config.json` | `config/mcp_config-template.json` | `install.ps1` prefers `config/mcp_config.json` if present; otherwise falls back to the template. Either way the resolved file is copied to `mcp_config.json` in the install dir on first install. Subsequent installs preserve any in-place edits to the install-dir copy. |
 | `config/sources.json` | `config/sources-template.json` | `install.ps1` copies template → `sources.json` in install dir on first install if no real one exists. |
 | `Prompts.local/system_prompt.md` | `src/SecondBrain.Llm/Prompts/system_prompt-template.md` | App copies template → live file in install dir on first run (`SystemPrompt.cs`). |
 | `Prompts.local/aliases.md` | `src/SecondBrain.Llm/Prompts/aliases-template.md` | Same. |
 
-The templates ship with the binary via `<None CopyToOutputDirectory="PreserveNewest" />`. The live files are auto-bootstrapped from them when missing, then user-edited and never overwritten. Edit the live file, restart the service.
+The prompt templates ship with the binary via `<None CopyToOutputDirectory="PreserveNewest" />`. The live files are auto-bootstrapped from them when missing, then user-edited and never overwritten. Edit the live file, restart the service.
 
 ### `config/mcp_config.json` (per-install)
 
-Service-level settings. Read by `Program.cs` at startup. Lives at `%LOCALAPPDATA%\SecondBrainMcpServer\mcp_config.json`.
+Service-level settings. Read by `Program.cs` at startup. Lives at `%LOCALAPPDATA%\SecondBrainMcpServer\mcp_config.json`. The repo ships `config/mcp_config-template.json` with sane defaults; on first install, `install.ps1` copies your `config/mcp_config.json` (gitignored, personal) if one exists, otherwise the template. Subsequent installs preserve in-place edits to the install-dir copy. Any field omitted from the file falls back to the documented default.
 
-Key fields:
-- `service_name`, `display_name`, `description` — Windows service registration.
-- `http_host`, `http_port` — listen address. Default `0.0.0.0:9998`.
-- `mcp_timeout` — request timeout in seconds.
-- `log_level` — `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Logs go to `logs/second_brain_<timestamp>.log` next to the binary.
-- `second_brain.default_model` — default Claude model (`claude-haiku-4-5`).
-- `second_brain.escalation_model` — model used by the compactor (`claude-sonnet-4-6`). Not used by `ask`; all effort tiers run on `default_model`.
-- `second_brain.compact_threshold_tokens` — auto-compact trigger (`150000`).
-- `second_brain.fts_db_path`, `requests_db_path`, `session_state_path` — relative to install dir.
-- `second_brain.sources_config` — points at `config/sources.json` in the install dir.
-- `second_brain.index_max_bytes` — file-size cap for indexing (`5000000`).
-- `second_brain.index_refresh_interval_seconds` — interval for the background incremental-refresh loop (`3600` = every hour). Set to `0` to disable. The loop runs once on startup to catch drift, then on the configured cadence.
-- `second_brain.vertex_base_url` — optional override for the Vertex endpoint. When non-empty, the service routes Vertex requests to this URL (e.g. `http://localhost:9996` for a local proxy) instead of the SDK's region-derived Google URL. Leave as `""` to use the default.
-- `second_brain.summarize_safety_buffer_seconds` — seconds before the per-call `mcp_timeout` at which `generate_summaries` stops dispatching new batch waves so in-flight calls can complete and the response can return cleanly. Default `30`.
-- `enable_logging` — turns the file/console Serilog sinks on or off. Default `true`.
-- `second_brain.state_persist_every_n_messages` — how often `session-state.json` is rewritten during a long ask, expressed in messages added since the last write. Default `5`.
-- `second_brain.state_backup_count` — how many rotating `session-state.json.bak.N` copies to retain. Default `5`.
+#### Top-level (service host)
+
+| Key | Default | Purpose |
+|---|---|---|
+| `service_name` | `SecondBrainHttpMcp` | Windows service name used by `sc.exe`/`net start`. |
+| `display_name` | `Second Brain HTTP MCP` | Human-readable service name shown in `services.msc`. |
+| `description` | (string) | Service description registered with SCM. |
+| `http_host` | `0.0.0.0` | Listen address. `0.0.0.0` accepts any IP; `127.0.0.1` for loopback only. |
+| `http_port` | `9998` | TCP port for `/mcp`, `/health`, `/stats`. |
+| `mcp_timeout` | `120` | Per-request timeout in seconds for the MCP JSON-RPC handler. |
+| `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Logs to `logs/second_brain_<timestamp>.log`. |
+| `enable_logging` | `true` | Turns the file/console Serilog sinks on or off. |
+
+#### `second_brain.*` — paths and identity
+
+| Key | Default | Purpose |
+|---|---|---|
+| `anthropic_api_key_env` | `ANTHROPIC_API_KEY` | Name of the env var the service reads to get the Anthropic API key. Service runs as LocalSystem and only sees machine-scope vars. |
+| `fts_db_path` | `index/fts.db` | FTS5 content index. Relative paths resolve against the install dir. |
+| `requests_db_path` | `index/requests.db` | Request/response history (search + ask). |
+| `session_state_path` | `index/session-state.json` | Persistent `ClaudeSession` state (messages, token estimate, last-compacted timestamp). |
+| `sources_config` | `config/sources.json` | Source folder definitions consumed by the indexer. |
+
+#### `second_brain.*` — models
+
+| Key | Default | Purpose |
+|---|---|---|
+| `default_model` | `claude-haiku-4-5` | Model used for `ask` at all effort tiers. |
+| `escalation_model` | `claude-sonnet-4-6` | Used only by the compactor. Not selectable via `ask`'s `effort` arg. |
+| `vertex_base_url` | `""` | Optional override for the Vertex endpoint. Non-empty routes requests to that URL (e.g. `http://localhost:9996` for a local proxy) instead of the SDK's region-derived Google URL. |
+
+#### `second_brain.*` — session and persistence
+
+| Key | Default | Purpose |
+|---|---|---|
+| `compact_threshold_tokens` | `150000` | When the session's approximate token count crosses this at the start of an `ask`, compaction runs first. Also serves as the tool-loop's context-soft-limit (forces omit-Tools synthesis to keep request size below the 200K hard cap). |
+| `state_persist_every_n_messages` | `5` | Cadence for rewriting `session-state.json` during a long ask, counted in messages added since the last write. |
+| `state_backup_count` | `5` | Number of rotating `session-state.json.bak.N` copies to retain. |
+
+#### `second_brain.*` — tool loop (per-`ask` runtime)
+
+| Key | Default | Purpose |
+|---|---|---|
+| `max_tool_turns` | `25` | Hard cap on tool-use turns within one `ask`. When hit, the next call omits Tools to force synthesis. Each turn appends the model's response and the tool results to history. |
+| `max_read_file_bytes` | `131072` (128 KB) | Per-call cap on `read_file` response size. Larger files are truncated with a marker pointing the model to use a more focused search. |
+| `base_output_tokens` | `8192` | Default output token budget for LLM calls. The tool loop adds the effort-tier thinking budget on top. The compactor and summarizer also default to this value as their per-call output ceiling. |
+| `compactor_max_output_tokens` | `8192` | Max output tokens for the compactor's one-shot summary call. Override only if the compactor needs a different ceiling than the rest of the pipeline. |
+
+#### `second_brain.*` — indexing
+
+| Key | Default | Purpose |
+|---|---|---|
+| `index_max_bytes` | `500000` (500 KB) | File-size cap during indexing. Files larger than this are skipped and never enter `fts.db`. |
+| `index_refresh_interval_seconds` | `3600` | Cadence for the background `IndexRefreshService` incremental loop. Runs once on startup to catch drift, then on this cadence. Set to `0` to disable the loop entirely (manual `rebuild_index` only). |
+| `index_anomaly_change_threshold` | `200` | If a single auto-refresh adds/modifies more files than this, the run is treated as anomalous: summarization is blocked and an alert appears on `/stats`. Protects against runaway summarization cost when the corpus changes en masse (mass file move, restored backup). |
+
+#### `second_brain.*` — search
+
+| Key | Default | Purpose |
+|---|---|---|
+| `search_max_snippet_tokens` | `64` | Caller's `snippet_tokens` request is clamped to this value at the search engine. |
+| `search_per_variant_overfetch_min` | `30` | Lower bound on per-variant overfetch in multi-query (RRF) search. Each variant fetches `max(min, top * 2)` hits before fusion. |
+| `search_per_variant_overfetch_max` | `50` | Upper bound on per-variant overfetch. Caps the per-variant fetch so a high `top` doesn't blow out the cost per fused query. |
+
+#### `second_brain.*` — summarization (`generate_summaries`)
+
+| Key | Default | Purpose |
+|---|---|---|
+| `summarizer_content_budget_chars` | `80000` | Per-API-call input budget for the document summarizer, in characters (~20K tokens). Limits how much content is packed into a single batch API call. |
+| `summarizer_input_char_limits` | (per-type dict; see below) | Per-source-type cap on document content fed into the summarizer. Documents larger than the per-type cap are truncated. |
+| `summarize_safety_buffer_seconds` | `30` | Seconds before `mcp_timeout` at which the summarizer stops dispatching new batch waves so in-flight calls can complete and the response returns cleanly. |
+
+Default `summarizer_input_char_limits`:
+| Source type | Chars |
+|---|---|
+| `1on1` | 24000 |
+| `transcript` | 20000 |
+| `standup` | 6000 |
+| `planning` | 16000 |
+| `note` | 8000 |
+| `default` (any other type) | 12000 |
+
+The `default` key is consulted when a document's `source_type` is missing from the dict. If `default` is also missing, an internal fallback of `12000` is used.
 
 ### `config/pricing.json` (versioned in repo)
 
@@ -498,7 +565,7 @@ From an admin PowerShell at the repo root:
 .\scripts\install.ps1
 ```
 
-Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`, copies `config/mcp_config.json` (only on first install — preserves any local edits on subsequent runs), always refreshes `pricing.json`, copies `sources.json` if you have one or falls back to `sources-template.json` (renamed to `sources.json` in the install dir so you can edit it in place), registers the Windows service, and adds the `second-brain` entry to `~/.claude.json`.
+Verifies .NET 10 SDK and ASP.NET Core 10 runtime, builds and publishes `SecondBrain.Mcp`, `SecondBrain.IndexBuilder`, and `SecondBrain.AliasMiner` to `%LOCALAPPDATA%\SecondBrainMcpServer\`. On first install copies `config/mcp_config.json` (your personal copy if present, else `mcp_config-template.json`) and `config/sources.json` (your personal copy if present, else `sources-template.json`); subsequent installs preserve any local edits to those files in the install dir. Always refreshes `pricing.json`. Registers the Windows service and adds the `second-brain` entry to `~/.claude.json`.
 
 After install, you must:
 1. Set `ANTHROPIC_API_KEY` (or the Vertex env vars) at machine scope.
@@ -654,7 +721,8 @@ second-brain-mcp.slnx                  .NET solution
 
 config/
   sources-template.json                generic example; copy to sources.json (gitignored) and edit
-  mcp_config.json                      service config template; copied to install dir on first install
+  mcp_config-template.json             service config template with sane defaults; copied to install dir on first install if no personal mcp_config.json exists
+  mcp_config.json                      (gitignored) personal service config — preferred over the template by install.ps1
   pricing.json                         per-model USD pricing for cost tracking
 
 scripts/

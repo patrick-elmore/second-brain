@@ -75,7 +75,83 @@ public sealed class SecondBrainSettings
     public int StateBackupCount { get; set; } = 5;
 
     [JsonPropertyName("index_max_bytes")]
-    public int IndexMaxBytes { get; set; } = 5_000_000;
+    public int IndexMaxBytes { get; set; } = 500_000;
+
+    [JsonPropertyName("max_tool_turns")]
+    public int MaxToolTurns { get; set; } = 25;
+
+    [JsonPropertyName("max_read_file_bytes")]
+    public int MaxReadFileBytes { get; set; } = 131_072;
+
+    /// <summary>
+    /// Default max output tokens for LLM calls. Used by the tool loop (via
+    /// EffortConfig as the base before adding any thinking budget), the
+    /// compactor, and the document summarizer's per-batch ceiling.
+    /// </summary>
+    [JsonPropertyName("base_output_tokens")]
+    public int BaseOutputTokens { get; set; } = 8_192;
+
+    /// <summary>
+    /// Max output tokens for the compactor's one-shot summarization call.
+    /// Defaults to BaseOutputTokens; override only if the compactor needs a
+    /// different ceiling than the rest of the pipeline.
+    /// </summary>
+    [JsonPropertyName("compactor_max_output_tokens")]
+    public int CompactorMaxOutputTokens { get; set; } = 8_192;
+
+    /// <summary>
+    /// Per-API-call input budget for the document summarizer, in characters.
+    /// Larger documents are truncated according to <see cref="SummarizerInputCharLimits"/>.
+    /// </summary>
+    [JsonPropertyName("summarizer_content_budget_chars")]
+    public int SummarizerContentBudgetChars { get; set; } = 80_000;
+
+    /// <summary>
+    /// Per-source-type cap on document content fed into the summarizer, in
+    /// characters. Keys match the source_type values emitted by the indexer.
+    /// The "default" key is used when a document's source type is not listed.
+    /// </summary>
+    [JsonPropertyName("summarizer_input_char_limits")]
+    public Dictionary<string, int> SummarizerInputCharLimits { get; set; } = new()
+    {
+        ["1on1"] = 24_000,
+        ["transcript"] = 20_000,
+        ["standup"] = 6_000,
+        ["planning"] = 16_000,
+        ["note"] = 8_000,
+        ["default"] = 12_000,
+    };
+
+    /// <summary>
+    /// Hard cap on the snippet token count requested by callers of search.
+    /// Larger requests are clamped down to this value at the engine layer.
+    /// </summary>
+    [JsonPropertyName("search_max_snippet_tokens")]
+    public int SearchMaxSnippetTokens { get; set; } = 64;
+
+    /// <summary>
+    /// Lower bound on per-variant overfetch in multi-query (RRF) search. Each
+    /// variant fetches max(min, top * 2) hits before fusion.
+    /// </summary>
+    [JsonPropertyName("search_per_variant_overfetch_min")]
+    public int SearchPerVariantOverfetchMin { get; set; } = 30;
+
+    /// <summary>
+    /// Upper bound on per-variant overfetch in multi-query (RRF) search. Caps
+    /// the per-variant fetch so a high <c>top</c> doesn't blow out the cost
+    /// per fused query.
+    /// </summary>
+    [JsonPropertyName("search_per_variant_overfetch_max")]
+    public int SearchPerVariantOverfetchMax { get; set; } = 50;
+
+    /// <summary>
+    /// File-change threshold above which the background index refresh treats
+    /// the run as anomalous: summarization is blocked and an alert is raised
+    /// on /stats. Protects against runaway summarization cost when the corpus
+    /// changes en masse.
+    /// </summary>
+    [JsonPropertyName("index_anomaly_change_threshold")]
+    public int IndexAnomalyChangeThreshold { get; set; } = 200;
 
     [JsonPropertyName("index_refresh_interval_seconds")]
     public int IndexRefreshIntervalSeconds { get; set; } = 3600;

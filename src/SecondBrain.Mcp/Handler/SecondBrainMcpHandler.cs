@@ -600,10 +600,10 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
 
     /// <summary>
     /// Groups rows into batches whose total effective content stays within
-    /// <see cref="DocumentSummarizer.ContentBudgetChars"/>. Rows that individually
+    /// the summarizer's configured content budget. Rows that individually
     /// exceed the budget are placed alone in their own batch.
     /// </summary>
-    private static List<List<UnsummarizedRow>> BuildDynamicBatches(IReadOnlyList<UnsummarizedRow> rows)
+    private List<List<UnsummarizedRow>> BuildDynamicBatches(IReadOnlyList<UnsummarizedRow> rows)
     {
         var batches = new List<List<UnsummarizedRow>>();
         var current = new List<UnsummarizedRow>();
@@ -611,9 +611,9 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
 
         foreach (var row in rows)
         {
-            var effective = (int)Math.Min(row.SizeBytes, DocumentSummarizer.InputCharLimit(row.SourceType));
+            var effective = (int)Math.Min(row.SizeBytes, _summarizer.InputCharLimit(row.SourceType));
 
-            if (current.Count > 0 && budgetUsed + effective > DocumentSummarizer.ContentBudgetChars)
+            if (current.Count > 0 && budgetUsed + effective > _summarizer.ContentBudgetChars)
             {
                 batches.Add(current);
                 current = new List<UnsummarizedRow>();
