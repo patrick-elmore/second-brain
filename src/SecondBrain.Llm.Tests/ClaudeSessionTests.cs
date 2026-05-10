@@ -291,9 +291,10 @@ public sealed class ClaudeSessionTests : IDisposable
         await session.AskAsync("Q?", null, "low", CancellationToken.None);
 
         var callJson = JsonSerializer.Serialize(fake.Calls[0]);
-        // The default system prompt resolves to SystemPrompt.Text (template + aliases).
-        // Sentinel from the template guaranteed to be present.
-        callJson.Should().Contain("knowledge retrieval assistant");
+        // The default system prompt resolves to SystemPrompt.Text. Sentinel "knowledge
+        // retrieval" appears in both the shipped template and any reasonable customized
+        // prompt for this corpus.
+        callJson.Should().Contain("knowledge retrieval");
     }
 
     [Fact]

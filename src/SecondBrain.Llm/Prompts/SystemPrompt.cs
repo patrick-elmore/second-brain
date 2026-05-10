@@ -17,8 +17,23 @@ public static class SystemPrompt
 
     private static readonly string PromptsDir =
         Path.Combine(AppContext.BaseDirectory, "Prompts");
-    private static readonly string LocalDir =
-        Path.Combine(AppContext.BaseDirectory, "Prompts.local");
+
+    // Single source of truth across all binaries: repo-root Prompts.local in dev,
+    // BaseDirectory/Prompts.local in production deploys. Walk up from the binary
+    // looking for the solution file marker; if found we are in a dev tree.
+    private static readonly string LocalDir = ResolveLocalDir();
+
+    private static string ResolveLocalDir()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "second-brain-mcp.slnx")))
+                return Path.Combine(dir.FullName, "Prompts.local");
+            dir = dir.Parent;
+        }
+        return Path.Combine(AppContext.BaseDirectory, "Prompts.local");
+    }
 
     /// <summary>The raw template with {ALIASES} unsubstituted. Tunable surface.</summary>
     public static string Template { get; } = LoadOrBootstrap("system_prompt");
