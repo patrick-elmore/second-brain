@@ -162,4 +162,63 @@ public sealed class SourceFolderScannerTests : IDisposable
 
         result.Should().AllSatisfy(f => f.SourceFolderId.Should().Be("my-source"));
     }
+
+    [Fact]
+    public void Scan_DefaultExcludesSkipNodeModulesAndBin()
+    {
+        Write("keep.md");
+        Write("node_modules/lib/index.js");
+        Write("bin/Debug/app.dll.config");
+        Write("src/code.ts");
+
+        var scanner = new SourceFolderScanner();
+        var result = scanner.Scan(Folder(), maxBytes: 1_000_000).ToList();
+
+        result.Select(f => f.RelativePath).Should().BeEquivalentTo(
+            ["keep.md", Path.Combine("src", "code.ts")]);
+    }
+
+    [Fact]
+    public void Scan_DefaultExcludesSkipMinifiedAndSourceMaps()
+    {
+        Write("app.js");
+        Write("app.min.js");
+        Write("styles.css");
+        Write("styles.min.css");
+        Write("bundle.js.map");
+        Write("bundle.css.map");
+
+        var scanner = new SourceFolderScanner();
+        var result = scanner.Scan(Folder(), maxBytes: 1_000_000).ToList();
+
+        result.Select(f => f.RelativePath).Should().BeEquivalentTo(["app.js", "styles.css"]);
+    }
+
+    [Fact]
+    public void Scan_DefaultExcludesAreCaseInsensitive()
+    {
+        Write("BIN/x.md");
+        Write("Node_Modules/y.md");
+        Write("APP.MIN.JS");
+        Write("keep.md");
+
+        var scanner = new SourceFolderScanner();
+        var result = scanner.Scan(Folder(), maxBytes: 1_000_000).ToList();
+
+        result.Select(f => f.RelativePath).Should().BeEquivalentTo(["keep.md"]);
+    }
+
+    [Fact]
+    public void Scan_PerSourceExcludesAddToDefaults()
+    {
+        Write("keep.md");
+        Write("node_modules/lib.js"); // default exclude
+        Write("Archive/old.md");      // per-source exclude
+
+        var excludes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Archive" };
+        var scanner = new SourceFolderScanner();
+        var result = scanner.Scan(Folder(excludes), maxBytes: 1_000_000).ToList();
+
+        result.Select(f => f.RelativePath).Should().BeEquivalentTo(["keep.md"]);
+    }
 }

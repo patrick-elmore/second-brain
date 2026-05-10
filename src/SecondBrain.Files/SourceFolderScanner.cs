@@ -11,6 +11,9 @@ public sealed class SourceFolderScanner
 
         foreach (var filePath in EnumerateFiles(folder.AbsolutePath, folder.ExcludeSubfolders))
         {
+            if (HasExcludedExtension(filePath))
+                continue;
+
             FileInfo info;
             try
             {
@@ -71,7 +74,7 @@ public sealed class SourceFolderScanner
             if (Directory.Exists(entry))
             {
                 var dirName = Path.GetFileName(entry);
-                if (excludeSubfolders.Contains(dirName))
+                if (excludeSubfolders.Contains(dirName) || ScanDefaults.ExcludeSubfolders.Contains(dirName))
                     continue;
 
                 foreach (var nested in EnumerateFiles(entry, excludeSubfolders))
@@ -82,5 +85,15 @@ public sealed class SourceFolderScanner
                 yield return entry;
             }
         }
+    }
+
+    private static bool HasExcludedExtension(string filePath)
+    {
+        foreach (var ext in ScanDefaults.ExcludeFileExtensions)
+        {
+            if (filePath.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 }
