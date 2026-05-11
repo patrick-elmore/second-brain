@@ -23,6 +23,7 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
     private readonly string _sourcesConfigPath;
     private readonly string _ftsDbPath;
     private readonly int _indexMaxBytes;
+    private readonly IReadOnlyList<string> _frontmatterDateFolders;
     private readonly FileReader _fileReader;
     private readonly DocumentSummarizer _summarizer;
     private readonly int _mcpTimeoutSeconds;
@@ -44,7 +45,8 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         int mcpTimeoutSeconds,
         int summarizeSafetyBufferSeconds,
         ILogger logger,
-        StatsTracker? stats = null)
+        StatsTracker? stats = null,
+        IReadOnlyList<string>? frontmatterDateFolders = null)
     {
         _session = session;
         _searchEngine = searchEngine;
@@ -52,6 +54,7 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         _sourcesConfigPath = sourcesConfigPath;
         _ftsDbPath = ftsDbPath;
         _indexMaxBytes = indexMaxBytes;
+        _frontmatterDateFolders = frontmatterDateFolders ?? [];
         _fileReader = fileReader;
         _summarizer = summarizer;
         _mcpTimeoutSeconds = mcpTimeoutSeconds;
@@ -232,7 +235,18 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
         var compactInstruction = args["compact_instruction"]?.GetValue<string>();
         var effort = args["effort"]?.GetValue<string>() ?? "low";
 
-        var askResult = await _session.AskAsync(question, compactInstruction, effort, ct);
+        // Prepend an explicit date context so the model can resolve relative date
+        // references ("Friday", "yesterday", "this week") without guessing.
+        // This rides in the user message rather than the system prompt to keep
+        // the system prompt cacheable.
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.Local);
+        var datePrefix = $"""
+            [DATE CONTEXT: Today is {now:dddd, MMMM d, yyyy}. You MUST use this date to resolve every relative date reference in the question — "today", "yesterday", "this week", "last week", day names like "Monday" or "Friday", and any other time-relative expression. Calculate the explicit calendar date before searching. Do not ask for clarification about relative dates; compute them from the anchor above.]
+
+            """;
+        var questionWithDate = datePrefix + question;
+
+        var askResult = await _session.AskAsync(questionWithDate, compactInstruction, effort, ct);
 
         // Persist ask request
         var files = askResult.FilesReferenced.Select((path, i) => new RequestFile(
@@ -354,7 +368,8 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
             if (mode == "full")
             {
                 var builder = new IndexBuilder();
-                var summary = builder.Build(_sourcesConfigPath, _ftsDbPath, _indexMaxBytes);
+                var summary = builder.Build(_sourcesConfigPath, _ftsDbPath, _indexMaxBytes,
+                    frontmatterDateFolders: _frontmatterDateFolders);
                 _logger.LogInformation(
                     "rebuild_index full: indexed={Indexed} skipped={Skipped} elapsed={Elapsed}",
                     summary.IndexedCount, summary.SkippedCount, summary.Elapsed);
@@ -370,7 +385,8 @@ public sealed class SecondBrainMcpHandler : IMcpRequestHandler
             }
 
             var updater = new IndexUpdater();
-            var update = updater.Update(_sourcesConfigPath, _ftsDbPath, _indexMaxBytes);
+            var update = updater.Update(_sourcesConfigPath, _ftsDbPath, _indexMaxBytes,
+                frontmatterDateFolders: _frontmatterDateFolders);
             _logger.LogInformation(
                 "rebuild_index incremental: added={Added} modified={Modified} removed={Removed} unchanged={Unchanged} skipped={Skipped} fullRebuild={Full} elapsed={Elapsed}",
                 update.Added, update.Modified, update.Removed, update.Unchanged, update.Skipped, update.FullRebuild, update.Elapsed);

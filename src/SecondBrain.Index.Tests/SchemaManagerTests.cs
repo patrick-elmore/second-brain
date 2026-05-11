@@ -84,6 +84,57 @@ public sealed class SchemaManagerTests : IDisposable
         cols.Should().Contain("source_type");
         cols.Should().Contain("metadata");
         cols.Should().Contain("summary");
+        cols.Should().Contain("effective_date");
+        cols.Should().Contain("file_created_at");
+        cols.Should().Contain("file_modified_at");
+        cols.Should().Contain("local_date");
+    }
+
+    [Fact]
+    public void EnsureFtsSchema_AddsNewDateColumnsToExistingSchema()
+    {
+        // Simulate a pre-existing database that lacks the three new date columns.
+        // Create the schema using raw SQL that matches the old schema shape.
+        using var conn = OpenRw();
+        using (var createOld = conn.CreateCommand())
+        {
+            createOld.CommandText = """
+                CREATE TABLE files (
+                    id                INTEGER PRIMARY KEY,
+                    source_folder_id  TEXT NOT NULL,
+                    absolute_path     TEXT NOT NULL UNIQUE,
+                    relative_path     TEXT NOT NULL,
+                    size_bytes        INTEGER NOT NULL,
+                    mtime             REAL NOT NULL,
+                    indexed_at        TEXT NOT NULL,
+                    source_type       TEXT,
+                    metadata          TEXT,
+                    summary           TEXT
+                );
+                CREATE VIRTUAL TABLE files_fts USING fts5(path, content, summary, tokenize='porter unicode61');
+                """;
+            createOld.ExecuteNonQuery();
+        }
+
+        // Insert a row with the old schema
+        using (var ins = conn.CreateCommand())
+        {
+            ins.CommandText = "INSERT INTO files (source_folder_id, absolute_path, relative_path, size_bytes, mtime, indexed_at) VALUES ('s','a','r',1,1.0,'now')";
+            ins.ExecuteNonQuery();
+        }
+
+        // Calling EnsureFtsSchema should add the new columns without dropping data
+        new SchemaManager().EnsureFtsSchema(conn);
+
+        var cols = GetColumnNames(conn, "files");
+        cols.Should().Contain("effective_date");
+        cols.Should().Contain("file_created_at");
+        cols.Should().Contain("file_modified_at");
+        cols.Should().Contain("local_date");
+
+        using var count = conn.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM files";
+        ((long)count.ExecuteScalar()!).Should().Be(1);
     }
 
     [Fact]

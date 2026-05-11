@@ -73,7 +73,8 @@ public sealed class IndexRefreshService : BackgroundService
             try
             {
                 var updater = new IndexUpdater();
-                var summary = updater.Update(sourcesConfig, ftsDbPath, maxBytes);
+                var summary = updater.Update(sourcesConfig, ftsDbPath, maxBytes,
+                    frontmatterDateFolders: _settings.SecondBrain.FrontmatterDateFolders);
 
                 _state.StatsTracker?.RecordIndexRefresh(
                     summary.Added, summary.Modified, summary.Removed,

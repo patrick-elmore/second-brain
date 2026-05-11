@@ -13,15 +13,16 @@ internal sealed class FilterBuilder
     public void AddDateStart(DateOnly date)
     {
         var p = NextParam(SqliteType.Text);
-        // Filter on metadata.created field; fall back to NULL (no match) if field absent
-        _clauses.Add($"date(json_extract(f.metadata, '$.created')) >= {p}");
+        // local_date is always populated at index time (YYYY-MM-DD in server local timezone).
+        // Simple string comparison is correct and avoids epoch arithmetic across timezone boundaries.
+        _clauses.Add($"f.local_date >= {p}");
         _params.Add((p, date.ToString("yyyy-MM-dd"), SqliteType.Text));
     }
 
     public void AddDateEnd(DateOnly date)
     {
         var p = NextParam(SqliteType.Text);
-        _clauses.Add($"date(json_extract(f.metadata, '$.created')) <= {p}");
+        _clauses.Add($"f.local_date <= {p}");
         _params.Add((p, date.ToString("yyyy-MM-dd"), SqliteType.Text));
     }
 

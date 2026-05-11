@@ -122,7 +122,8 @@ public sealed class McpHostedService : IHostedService
             mcpTimeoutSeconds: _settings.McpTimeout,
             summarizeSafetyBufferSeconds: sb.SummarizeSafetyBufferSeconds,
             logger: _logger,
-            stats: statsTracker);
+            stats: statsTracker,
+            frontmatterDateFolders: sb.FrontmatterDateFolders);
 
         await handler.StartAsync(cancellationToken);
         _state.Handler = handler;

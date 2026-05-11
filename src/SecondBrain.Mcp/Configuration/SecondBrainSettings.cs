@@ -170,6 +170,16 @@ public sealed class SecondBrainSettings
     public int IndexRefreshIntervalSeconds { get; set; } = 3600;
 
     /// <summary>
+    /// Absolute paths of folders whose files should have YAML frontmatter
+    /// consulted for a <c>created</c> date before falling back to filepath
+    /// regex and filesystem ctime. Any file whose absolute path starts with
+    /// one of these prefixes qualifies for frontmatter extraction.
+    /// Configure via mcp_config.json: "second_brain": { "frontmatter_date_folders": ["C:\\..."] }
+    /// </summary>
+    [JsonPropertyName("frontmatter_date_folders")]
+    public List<string> FrontmatterDateFolders { get; set; } = [];
+
+    /// <summary>
     /// Seconds before <c>McpTimeout</c> expires at which the summarizer stops
     /// dispatching new batch waves. Ensures in-flight requests complete and the
     /// response is returned before the MCP connection times out.

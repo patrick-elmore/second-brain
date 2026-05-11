@@ -5,4 +5,5 @@ public sealed record SourceFile(
     string AbsolutePath,
     string RelativePath,
     long SizeBytes,
-    double MTime);
+    double MTime,
+    double CTime = 0.0);

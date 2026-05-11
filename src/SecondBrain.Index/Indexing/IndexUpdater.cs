@@ -19,7 +19,8 @@ public sealed class IndexUpdater
     private readonly FrontmatterParser _frontmatterParser = new();
     private readonly SchemaManager _schemaManager = new();
 
-    public IndexUpdateSummary Update(string sourcesConfigPath, string dbPath, int maxBytes)
+    public IndexUpdateSummary Update(string sourcesConfigPath, string dbPath, int maxBytes,
+        IReadOnlyList<string>? frontmatterDateFolders = null)
     {
         var sw = Stopwatch.StartNew();
 
@@ -32,7 +33,7 @@ public sealed class IndexUpdater
         if (!File.Exists(dbPath) || !HasFilesTable(dbPath))
         {
             var builder = new IndexBuilder();
-            var summary = builder.Build(sourcesConfigPath, dbPath, maxBytes);
+            var summary = builder.Build(sourcesConfigPath, dbPath, maxBytes, frontmatterDateFolders);
             return new IndexUpdateSummary(
                 Added: summary.IndexedCount,
                 Modified: 0,
@@ -62,6 +63,7 @@ public sealed class IndexUpdater
 
         _schemaManager.EnsureFtsSchema(conn);
 
+        var dateDeriver = new DateDeriver(frontmatterDateFolders ?? []);
         var existing = LoadExistingFiles(conn);
         var (toAdd, toModify, unchanged, seenPaths) = ScanAndDiff(folders, maxBytes, existing);
         var toRemove = existing
@@ -92,7 +94,7 @@ public sealed class IndexUpdater
                 deleteCmd.Parameters["@id"].Value = existingId;
                 deleteCmd.ExecuteNonQuery();
 
-                if (TryInsertFile(file, fileReader, indexedAt, insertFiles, insertFts, lastIdCmd))
+                if (TryInsertFile(file, fileReader, dateDeriver, indexedAt, insertFiles, insertFts, lastIdCmd))
                     modified++;
                 else
                     skipped++;
@@ -100,7 +102,7 @@ public sealed class IndexUpdater
 
             foreach (var file in toAdd)
             {
-                if (TryInsertFile(file, fileReader, indexedAt, insertFiles, insertFts, lastIdCmd))
+                if (TryInsertFile(file, fileReader, dateDeriver, indexedAt, insertFiles, insertFts, lastIdCmd))
                     added++;
                 else
                     skipped++;
@@ -165,6 +167,7 @@ public sealed class IndexUpdater
     private bool TryInsertFile(
         SourceFile file,
         FileReader reader,
+        DateDeriver dateDeriver,
         string indexedAt,
         SqliteCommand insertFiles,
         SqliteCommand insertFts,
@@ -177,6 +180,7 @@ public sealed class IndexUpdater
 
         var fm = _frontmatterParser.Parse(content);
         var metadataJson = fm.Metadata.HasValue ? fm.Metadata.Value.GetRawText() : null;
+        var dateResult = dateDeriver.Derive(file.AbsolutePath, content, file.CTime);
 
         insertFiles.Parameters["@sfid"].Value = file.SourceFolderId;
         insertFiles.Parameters["@abspath"].Value = file.AbsolutePath;
@@ -186,6 +190,10 @@ public sealed class IndexUpdater
         insertFiles.Parameters["@indexed_at"].Value = indexedAt;
         insertFiles.Parameters["@source_type"].Value = (object?)fm.SourceType ?? DBNull.Value;
         insertFiles.Parameters["@metadata"].Value = (object?)metadataJson ?? DBNull.Value;
+        insertFiles.Parameters["@effective_date"].Value = (object?)dateResult.EffectiveDate ?? DBNull.Value;
+        insertFiles.Parameters["@file_created_at"].Value = file.CTime;
+        insertFiles.Parameters["@file_modified_at"].Value = file.MTime;
+        insertFiles.Parameters["@local_date"].Value = dateResult.LocalDate;
         insertFiles.ExecuteNonQuery();
 
         var rowId = (long)lastIdCmd.ExecuteScalar()!;
@@ -217,9 +225,11 @@ public sealed class IndexUpdater
         cmd.Transaction = txn;
         cmd.CommandText = """
             INSERT INTO files
-                (source_folder_id, absolute_path, relative_path, size_bytes, mtime, indexed_at, source_type, metadata)
+                (source_folder_id, absolute_path, relative_path, size_bytes, mtime, indexed_at,
+                 source_type, metadata, effective_date, file_created_at, file_modified_at, local_date)
             VALUES
-                (@sfid, @abspath, @relpath, @size, @mtime, @indexed_at, @source_type, @metadata)
+                (@sfid, @abspath, @relpath, @size, @mtime, @indexed_at,
+                 @source_type, @metadata, @effective_date, @file_created_at, @file_modified_at, @local_date)
             """;
         cmd.Parameters.Add("@sfid", SqliteType.Text);
         cmd.Parameters.Add("@abspath", SqliteType.Text);
@@ -229,6 +239,10 @@ public sealed class IndexUpdater
         cmd.Parameters.Add("@indexed_at", SqliteType.Text);
         cmd.Parameters.Add("@source_type", SqliteType.Text);
         cmd.Parameters.Add("@metadata", SqliteType.Text);
+        cmd.Parameters.Add("@effective_date", SqliteType.Real);
+        cmd.Parameters.Add("@file_created_at", SqliteType.Real);
+        cmd.Parameters.Add("@file_modified_at", SqliteType.Real);
+        cmd.Parameters.Add("@local_date", SqliteType.Text);
         return cmd;
     }
 

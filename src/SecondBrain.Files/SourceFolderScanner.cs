@@ -34,13 +34,15 @@ public sealed class SourceFolderScanner
 
             var relative = Path.GetRelativePath(folder.AbsolutePath, filePath);
             var mtime = info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds;
+            var ctime = info.CreationTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds;
 
             yield return new SourceFile(
                 SourceFolderId: folder.Id,
                 AbsolutePath: filePath,
                 RelativePath: relative,
                 SizeBytes: info.Length,
-                MTime: mtime);
+                MTime: mtime,
+                CTime: ctime);
         }
     }
 

@@ -20,7 +20,8 @@ public sealed class IndexBuilder
         _fileReader = new FileReader([]);
     }
 
-    public IndexBuildSummary Build(string sourcesConfigPath, string dbPath, int maxBytes)
+    public IndexBuildSummary Build(string sourcesConfigPath, string dbPath, int maxBytes,
+        IReadOnlyList<string>? frontmatterDateFolders = null)
     {
         var sw = Stopwatch.StartNew();
 
@@ -56,6 +57,8 @@ public sealed class IndexBuilder
         var schemaManager = new SchemaManager();
         schemaManager.CreateFtsSchema(conn);
 
+        var dateDeriver = new DateDeriver(frontmatterDateFolders ?? []);
+
         int indexed = 0;
         int skipped = 0;
 
@@ -66,9 +69,11 @@ public sealed class IndexBuilder
             insertFiles.Transaction = txn;
             insertFiles.CommandText = """
                 INSERT INTO files
-                    (source_folder_id, absolute_path, relative_path, size_bytes, mtime, indexed_at, source_type, metadata)
+                    (source_folder_id, absolute_path, relative_path, size_bytes, mtime, indexed_at,
+                     source_type, metadata, effective_date, file_created_at, file_modified_at, local_date)
                 VALUES
-                    (@sfid, @abspath, @relpath, @size, @mtime, @indexed_at, @source_type, @metadata)
+                    (@sfid, @abspath, @relpath, @size, @mtime, @indexed_at,
+                     @source_type, @metadata, @effective_date, @file_created_at, @file_modified_at, @local_date)
                 """;
             insertFiles.Parameters.Add("@sfid", SqliteType.Text);
             insertFiles.Parameters.Add("@abspath", SqliteType.Text);
@@ -78,6 +83,10 @@ public sealed class IndexBuilder
             insertFiles.Parameters.Add("@indexed_at", SqliteType.Text);
             insertFiles.Parameters.Add("@source_type", SqliteType.Text);
             insertFiles.Parameters.Add("@metadata", SqliteType.Text);
+            insertFiles.Parameters.Add("@effective_date", SqliteType.Real);
+            insertFiles.Parameters.Add("@file_created_at", SqliteType.Real);
+            insertFiles.Parameters.Add("@file_modified_at", SqliteType.Real);
+            insertFiles.Parameters.Add("@local_date", SqliteType.Text);
 
             using var insertFts = conn.CreateCommand();
             insertFts.Transaction = txn;
@@ -117,6 +126,7 @@ public sealed class IndexBuilder
                     var metadataJson = fm.Metadata.HasValue
                         ? fm.Metadata.Value.GetRawText()
                         : null;
+                    var dateResult = dateDeriver.Derive(file.AbsolutePath, content, file.CTime);
 
                     insertFiles.Parameters["@sfid"].Value = file.SourceFolderId;
                     insertFiles.Parameters["@abspath"].Value = file.AbsolutePath;
@@ -126,6 +136,10 @@ public sealed class IndexBuilder
                     insertFiles.Parameters["@indexed_at"].Value = indexedAt;
                     insertFiles.Parameters["@source_type"].Value = (object?)fm.SourceType ?? DBNull.Value;
                     insertFiles.Parameters["@metadata"].Value = (object?)metadataJson ?? DBNull.Value;
+                    insertFiles.Parameters["@effective_date"].Value = (object?)dateResult.EffectiveDate ?? DBNull.Value;
+                    insertFiles.Parameters["@file_created_at"].Value = file.CTime;
+                    insertFiles.Parameters["@file_modified_at"].Value = file.MTime;
+                    insertFiles.Parameters["@local_date"].Value = dateResult.LocalDate;
                     insertFiles.ExecuteNonQuery();
 
                     var rowId = (long)lastId.ExecuteScalar()!;
