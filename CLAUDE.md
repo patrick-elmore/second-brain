@@ -15,6 +15,18 @@ Examples of values that belong in config: byte caps, timeouts, retry counts, bat
 
 When you find a hardcoded constant that fits this pattern, lift it to config rather than tolerating it. Hardcoded constants drift from their config counterparts and become a source of "why is the deployed behavior different from the configured behavior" bugs.
 
+## Genericize all examples in source-controlled files
+
+When writing any content to a source-controlled file — prompt text, inline examples, comments, docstrings, test fixtures, or documentation — always use generic placeholder names and terms. Never use real names of teammates, managers, customers, internal product codenames, internal acronyms, or organization-specific terminology, even as illustrative examples.
+
+Generic replacements to default to:
+- **People**: Alice, Bob, Carol, Dave (or similar clearly fictional names)
+- **Companies**: Acme, Example Corp
+- **Projects / codenames**: use descriptive generic terms ("the legacy service", "the migration project")
+- **Internal acronyms / methodologies**: spell out a generic equivalent or omit
+
+This applies everywhere in committed files: C# string literals, SQL query strings, prompt templates, XML/JSON examples, markdown docs, and test data. The commit scan is a safety net — genericizing at write time is the correct prevention.
+
 ## Scan commits for personal or identifying content
 
 This is a public repo. Before any `git commit`, scan the staged diff for content that ties the commit to a specific person, employer, project, or local environment. The concern isn't security — it's keeping the repo clean and portable for anyone reading or forking it.
