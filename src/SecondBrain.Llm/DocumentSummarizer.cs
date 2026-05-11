@@ -340,8 +340,11 @@ public sealed class DocumentSummarizer
 
     /// <summary>
     /// Builds the cached system prompt with the configured source-type list
-    /// injected. Adding a new type to <c>SecondBrainSettings.SourceTypes</c>
-    /// updates the prompt automatically — no parallel edits required.
+    /// injected. Adding a type to <c>SecondBrainSettings.SourceTypes</c> auto-
+    /// injects it into the type list at the top of the prompt, but the
+    /// classification deep-dive (HOW TO PICK THE TYPE) is hardcoded for the
+    /// canonical 5 — extending the canonical set also requires extending that
+    /// section so the model knows how to recognize the new category.
     /// </summary>
     private static string BuildBatchSystemPrompt(IReadOnlyList<string> sourceTypes)
     {
@@ -375,10 +378,8 @@ public sealed class DocumentSummarizer
 
             REQUIREMENTS:
             - The "type:" line MUST be the first line inside the block and MUST exactly match
-              one of the values listed above (case-insensitive). Pick the value that best
-              describes the document's content based on what's actually in it (not the file
-              name or path). If nothing fits cleanly, pick the closest value — do not invent
-              new types.
+              one of the values listed above (case-insensitive). See HOW TO PICK THE TYPE
+              below for classification guidance.
             - The N in your SUMMARY block must match the N in the corresponding DOC block.
             - Produce summaries in ascending order of N. Do not skip any N.
             - Do not produce any text outside the SUMMARY blocks.
@@ -388,6 +389,179 @@ public sealed class DocumentSummarizer
                 type: note
                 summary: (no substantive content)
                 =====END:SUMMARY:N=====
+
+            ────────────────────────────────────────────────────────────────────────────
+            HOW TO PICK THE TYPE — apply in order. Stop at the first matching step.
+            ────────────────────────────────────────────────────────────────────────────
+
+            STEP 1 — IS THIS A MEETING / TRANSCRIPT?
+
+            The single most reliable signal is whether the underlying document is a
+            meeting transcript. Transcripts have a distinctive flow: people do things
+            to each other (discuss, agree, push back, raise concerns), decisions get
+            made in past tense, action items get named owners, and the structure is
+            multi-topic conversational rather than single-topic structural.
+
+            Decide YES if you see ANY combination of these (typically several at once):
+
+            CONVERSATIONAL SIGNALS:
+              - Named individuals interacting: "Alice mentioned", "Bob agreed",
+                "Carol raised", "Dave said", "the team discussed"
+              - First-person plural: "we discussed", "we agreed", "our team", "we'll"
+              - Past-tense decisions: "agreed to", "decided", "concluded", "resolved",
+                "settled on", "signed off on"
+              - Action items with owners: "Alice to write the memo", "Bob will
+                review", "owner: <name>", "<name> took the action"
+              - Quoted or paraphrased speech: "<name> said", "<name> pushed back on",
+                "<name> raised concerns about"
+              - Cross-group dynamics: "engineering wanted X but product was concerned"
+
+            STRUCTURAL SIGNALS:
+              - Meeting-type words in the opening: "X sync", "X retro", "X standup",
+                "X review", "X session", "X meeting", "X 1:1", "X chat", "X discussion",
+                "X intake", "X check-in", "X planning session"
+              - Multiple distinct topics covered in sequence (meeting-agenda shape)
+              - Time / cadence markers: "this morning's sync", "yesterday's standup",
+                "weekly retro", "Q1 planning meeting"
+              - Enumerated attendees, explicit or implicit: "Attendees:", "Present:",
+                "Alice and Bob"
+              - Open questions, parking-lot items, "TBD", "still need to decide"
+
+            SPEECH-TO-TEXT RESIDUE (the source was voice transcription):
+              - Mangled proper nouns or odd capitalization on technical terms
+              - In-room acronym usage without expansion
+              - Casual phrasing kept by the document: "the team got pretty animated",
+                "there was a lot of back and forth on", "we landed on"
+              - Topic-jumping or rambling structure in the underlying flow
+
+            If YES → go to STEP 2.
+            If NO  → go to STEP 4.
+
+            STEP 2 — IS IT A 1:1?
+
+            YES if BOTH:
+              - Exactly two named participants, typically the operator + one other
+              - Single deep conversation thread (career/feedback/cross-functional
+                alignment) rather than multi-topic agenda
+            Common phrasing: "<name> 1:1", "<name>/<name> sync", "<name> and <name> met"
+
+            → Pick: 1on1
+            → Otherwise: STEP 3
+
+            STEP 3 — IS IT A STANDUP?
+
+            YES if:
+              - Per-person status fragments (each person reports what they're on)
+              - Brief and structured; the document is short
+              - Identifying words: "daily standup", "DSU", "daily sync", "scrum"
+              - Format: yesterday / today / blockers
+
+            → Pick: standup
+            → Otherwise: transcript  (the meeting catch-all)
+
+            STEP 4 — PLANNING vs NOTE: ASK ABOUT AUDIENCE AND INTENT
+
+            You've ruled out a meeting. Now decide between `planning` and `note`. The
+            cut here is NOT about length, formality, or whether the document mentions
+            acceptance criteria. The cut is about AUDIENCE and INTENT.
+
+            THE FUNDAMENTAL QUESTION: who is this document written for, and is there
+            a next actor?
+
+            PLANNING — written for a next actor (someone who will build, decide on,
+            or use this). Defines work, approach, scope, or a system change. The
+            operator could hand this to a teammate and the teammate could DO
+            SOMETHING with it.
+
+              Surface signals in the document:
+                - Leads with what's being changed / built / added / proposed:
+                  "the endpoint adds", "this story implements", "the approach is",
+                  "we need to support", "proposed approach", "this PR / story / PBI"
+                - Third-person / passive voice describing the artifact rather than
+                  a person: "validates the input", "rolls out behind a flag"
+                - References work-item / story / ticket numbers, named features,
+                  named systems, named endpoints, named code paths
+                - Focus on a system or feature change, not on what people did or
+                  thought
+                - Even short documents count. "We need to support X for parts boxes"
+                  is a story body — somebody is going to build the thing.
+
+              Sources that produce planning: implementation plans, technical specs,
+              design docs, story / PBI / ticket / work-item bodies (even brief ones),
+              refinement output, scope docs, README-style intent docs, architecture
+              proposals.
+
+            NOTE — written BY the operator FOR the operator, capturing what they
+            observed, thought, or did in the moment. First-person. No implied next
+            actor. Nothing to be acted on by anyone else.
+
+              Surface signals in the document:
+                - First-person framing: "I noticed", "I'm thinking", "today I"
+                - Date-stamped journal feel: "notes from today", "today's entry",
+                  "thoughts on", "quick thought after the retro"
+                - Mix of observation, reaction, and personal follow-up items
+                - Mentions casual sources: "Jim mentioned at lunch", "saw in Slack"
+                - Reference / glossary / alias content the operator maintains for
+                  themselves to remember
+
+              Sources that produce note: daily journal entries (YYYY-MM-DD.md),
+              personal observations, post-meeting reactions the operator wrote down
+              for themselves, lists of things to look into, alias lists, glossaries,
+              generic reference markdown.
+
+            KEY TEST: imagine handing the document to a teammate. If they could read
+            it and DO SOMETHING — build it, decide on it, hand it off, use it —
+            that's `planning`. If only the operator gets value out of it because
+            it's their personal sense-making — that's `note`.
+
+            ANTI-DEFAULT: do not use `note` as a fallback when uncertain. A document
+            describing what to build, what changed, what was proposed, what's in
+            scope, or what someone should do IS `planning`. Reach for `note` ONLY
+            when the document is genuinely the operator processing the moment for
+            themselves with no next actor.
+
+            BORDERLINE CASES — apply these carve-outs before deciding:
+
+            1. RECORDS OF PAST WORK → depends on what was shipped.
+               - Commits / activity logs that shipped CODE or RUNTIME behavior
+                 (refactor, bug fix, feature implementation, deployment, config
+                 change to a running system) → NOTE. The work already shipped;
+                 there is no next actor.
+               - Commits / activity logs whose substance IS a planning artifact
+                 (story file, feature spec, rules doc, design doc, refinement
+                 output, scope change) → classify by the substance of the
+                 artifact, almost always PLANNING. The "Commit XYZ by <person>"
+                 framing does NOT reclassify a planning artifact as note.
+               Test: does the commit describe a system change that already
+               shipped, or does it describe an artifact someone will act on?
+               Past-tense framing alone is not enough to call note.
+
+            2. REFERENCE / GUIDE DOCS → depends on audience.
+               - A guide, standard, rules doc, or contributor doc that defines
+                 conventions for OTHERS to follow (style guide for teammates,
+                 coding standard for a team, agent rules document, skill
+                 definition, how-to guide for users) is PLANNING. The next
+                 actor is the future implementer or writer who will apply the
+                 rules.
+               - A personal cheat-sheet, memory aid, glossary, or alias list the
+                 operator wrote for themselves is NOTE. Only the operator
+                 consumes it.
+
+            3. INVESTIGATIONS / ANALYSIS → depends on disposition.
+               - Analysis that EXPLICITLY concludes "no changes needed" /
+                 "no action required" / "behavior is by design" with zero
+                 follow-up → NOTE.
+               - Investigation that articulates a problem to solve, names a
+                 follow-up, proposes an approach, surfaces recommendations,
+                 or identifies missing evidence to chase → PLANNING.
+               When in doubt, prefer PLANNING. Most investigations exist
+               because there's something to act on.
+
+            → Audience is "next actor"        → planning
+            → Audience is "operator-in-the-moment" → note
+
+            STEP 5 (FALLBACK): If you somehow reach this step without picking a label,
+            choose `note`. But you should almost never reach this step.
 
             UNIVERSAL SUMMARIZATION RULES (apply to every document regardless of type):
             - Lead with the most retrieval-relevant information
