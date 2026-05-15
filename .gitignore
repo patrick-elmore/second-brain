@@ -29,3 +29,6 @@ config/mcp_config.json
 
 # AliasMiner output (candidate aliases for review before promoting to aliases.md)
 alias-mining/
+
+# Playwright MCP runtime artifacts
+.playwright-mcp/

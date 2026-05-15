@@ -73,6 +73,9 @@ public static class McpEndpoints
             return Results.Json(state.StatsTracker.GetStats());
         });
 
+        app.MapGet("/favicon.svg", () =>
+            Results.Content(FaviconSvg.Content, "image/svg+xml"));
+
         app.MapPost("/summarize/override", ([FromServices] McpServiceState state) =>
         {
             state.StatsTracker?.ClearAnomalousRefresh();

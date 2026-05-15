@@ -13,6 +13,31 @@ namespace SecondBrain.Mcp.Stats;
 /// </summary>
 internal static class StatsHtmlRenderer
 {
+    private const string HeaderIcon = """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="1 3 30 23">
+          <defs>
+            <linearGradient id="hdr-sg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#4F46E5"/><stop offset="100%" stop-color="#06B6D4"/>
+            </linearGradient>
+            <linearGradient id="hdr-ng" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#818CF8"/><stop offset="100%" stop-color="#22D3EE"/>
+            </linearGradient>
+          </defs>
+          <path d="M 6 25 C 3 25, 2 21, 2 18 C 2 13, 4 9, 7 7 C 10 5, 13 4, 16 4 C 19 4, 22 5, 25 7 C 28 9, 30 13, 30 18 C 30 21, 29 25, 26 25 Z"
+            fill="#4F46E5" fill-opacity="0.12" stroke="url(#hdr-sg)" stroke-width="1.75" stroke-linejoin="round"/>
+          <line x1="9"  y1="15" x2="16" y2="13" stroke="url(#hdr-sg)" stroke-width="1.1" stroke-opacity="0.7"/>
+          <line x1="16" y1="13" x2="23" y2="15" stroke="url(#hdr-sg)" stroke-width="1.1" stroke-opacity="0.7"/>
+          <line x1="9"  y1="15" x2="10" y2="21" stroke="url(#hdr-sg)" stroke-width="1.1" stroke-opacity="0.7"/>
+          <line x1="23" y1="15" x2="22" y2="21" stroke="url(#hdr-sg)" stroke-width="1.1" stroke-opacity="0.7"/>
+          <line x1="10" y1="21" x2="22" y2="21" stroke="url(#hdr-sg)" stroke-width="1.1" stroke-opacity="0.7"/>
+          <circle cx="9"  cy="15" r="2"   fill="url(#hdr-ng)" stroke="#fff" stroke-width="0.75"/>
+          <circle cx="10" cy="21" r="1.7" fill="url(#hdr-ng)" stroke="#fff" stroke-width="0.6"/>
+          <circle cx="16" cy="13" r="2.5" fill="url(#hdr-ng)" stroke="#fff" stroke-width="0.75"/>
+          <circle cx="23" cy="15" r="2"   fill="url(#hdr-ng)" stroke="#fff" stroke-width="0.75"/>
+          <circle cx="22" cy="21" r="1.7" fill="url(#hdr-ng)" stroke="#fff" stroke-width="0.6"/>
+        </svg>
+        """;
+
     public static string Render(object statsSnapshot)
     {
         var node = JsonSerializer.SerializeToNode(statsSnapshot)?.AsObject()
@@ -23,6 +48,7 @@ internal static class StatsHtmlRenderer
             <!doctype html>
             <html lang="en"><head><meta charset="utf-8">
             <title>second-brain stats</title>
+            <link rel="icon" type="image/svg+xml" href="/favicon.svg">
             <style>
             html { background: #1a1a1a; }
             body { font-family: system-ui, -apple-system, sans-serif; max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; color: #e0e0e0; background: #1a1a1a; }
@@ -46,16 +72,25 @@ internal static class StatsHtmlRenderer
             .alert form { display: inline; margin-left: 1rem; }
             .alert button { background: #c07000; color: #fff; border: none; padding: .3rem .8rem; border-radius: 3px; cursor: pointer; font-size: .9rem; }
             .alert button:hover { background: #e08800; }
+            .page-header { display: flex; align-items: center; gap: 1.5rem; }
+            .page-header-text { flex: 1; min-width: 0; }
+            .page-header-text > p { margin-top: .15rem; margin-bottom: 0; }
+            .page-header-icon { flex-shrink: 0; }
+            .page-header-icon svg { display: block; height: 3.5rem; width: auto; }
             </style>
             </head><body>
             """);
 
+        sb.Append("<div class=\"page-header\"><div class=\"page-header-text\">");
         sb.Append("<h1>second-brain stats</h1>");
         sb.Append("<p class=\"muted\">uptime: ")
           .Append(Esc(node["uptime"]?.GetValue<string>()))
           .Append(" · stats since: ")
           .Append(Esc(FormatTimestamp(node["stats_since"])))
           .Append("</p>");
+        sb.Append("</div>");
+        sb.Append("<div class=\"page-header-icon\">").Append(HeaderIcon).Append("</div>");
+        sb.Append("</div>");
 
         RenderAnomalyAlert(sb, node["anomalous_pending_count"]);
         RenderLlm(sb, node["llm"]);
