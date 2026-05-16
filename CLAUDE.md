@@ -41,7 +41,7 @@ Run a quick check against staged files for things like:
 
 - **Personal identifiers**: names of teammates, managers, customers, the operator
 - **Employer / domain identifiers**: company names, internal product codenames, team names, customer names
-- **Local paths**: absolute Windows or POSIX paths, user profile folders, home directories
+- **Local paths**: absolute Windows or POSIX paths, user profile folders, home directories, or non-relative paths to files within this repo
 - **Personal corpus vocabulary**: meeting names, internal acronyms, voice-to-text aliases, project codenames that only make sense inside one organization
 - **Real test fixtures**: dates, work item numbers, ticket IDs, repo names from the operator's actual work
 - **Calendar / time references** that pin the commit to a specific person's schedule (1:1 cadence, sprint dates from one team)
