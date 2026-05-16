@@ -196,6 +196,15 @@ public sealed class SecondBrainSettings
     [JsonPropertyName("vertex_base_url")]
     public string VertexBaseUrl { get; set; } = "";
 
+    /// <summary>
+    /// When true, adds <c>X-CC-Proxy-Bypass: 1</c> to every request routed through
+    /// <see cref="VertexProxyHandler"/>. Enable when vertex_base_url points to a
+    /// proxy that supports the bypass header to skip prompt rewriting.
+    /// Has no effect when vertex_base_url is empty.
+    /// </summary>
+    [JsonPropertyName("proxy_bypass_header")]
+    public bool ProxyBypassHeader { get; set; } = false;
+
     public string ResolveApiKey() =>
         Environment.GetEnvironmentVariable(AnthropicApiKeyEnv) ?? string.Empty;
 }

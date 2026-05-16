@@ -24,10 +24,11 @@ public static class ClaudeSessionFactory
         int baseOutputTokens = 8_192,
         int compactorMaxOutputTokens = 8_192,
         string? vertexBaseUrl = null,
+        bool proxyBypassHeader = false,
         ILogger? logger = null,
         IStatsRecorder? stats = null)
     {
-        var rawClient = BuildClient(apiKey, vertexBaseUrl);
+        var rawClient = BuildClient(apiKey, vertexBaseUrl, proxyBypassHeader);
         var client = new AnthropicMessageCreator(rawClient);
         var compactor = new Compactor(client, escalationModel, compactorMaxOutputTokens, stats);
         var statePersistence = new StatePersistence(statePath, stateBackupCount);
@@ -49,7 +50,7 @@ public static class ClaudeSessionFactory
             stats: stats);
     }
 
-    public static IAnthropicClient BuildClient(string apiKey, string? vertexBaseUrl)
+    public static IAnthropicClient BuildClient(string apiKey, string? vertexBaseUrl, bool proxyBypassHeader = false)
     {
         var useVertex = string.Equals(
             Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_VERTEX"),
@@ -76,7 +77,7 @@ public static class ClaudeSessionFactory
             {
                 AutomaticDecompression = System.Net.DecompressionMethods.All,
             };
-            var proxyHttpClient = new HttpClient(new VertexProxyHandler(vertexBaseUrl, inner));
+            var proxyHttpClient = new HttpClient(new VertexProxyHandler(vertexBaseUrl, inner, proxyBypassHeader));
 
             return new AnthropicVertexClient(credentials)
             {

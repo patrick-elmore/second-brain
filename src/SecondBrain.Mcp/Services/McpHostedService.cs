@@ -94,12 +94,13 @@ public sealed class McpHostedService : IHostedService
             baseOutputTokens: sb.BaseOutputTokens,
             compactorMaxOutputTokens: sb.CompactorMaxOutputTokens,
             vertexBaseUrl: sb.VertexBaseUrl,
+            proxyBypassHeader: sb.ProxyBypassHeader,
             logger: _logger,
             stats: statsTracker);
 
         // Build a separate client for the document summarizer (same credentials,
         // separate instance so it doesn't share state with the session client).
-        var summarizerRawClient = ClaudeSessionFactory.BuildClient(apiKey, sb.VertexBaseUrl);
+        var summarizerRawClient = ClaudeSessionFactory.BuildClient(apiKey, sb.VertexBaseUrl, sb.ProxyBypassHeader);
         var summarizerClient = new AnthropicMessageCreator(summarizerRawClient);
         var summarizer = new DocumentSummarizer(
             summarizerClient,

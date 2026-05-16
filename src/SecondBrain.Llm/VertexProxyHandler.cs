@@ -16,13 +16,15 @@ namespace SecondBrain.Llm;
 internal sealed class VertexProxyHandler : DelegatingHandler
 {
     private readonly Uri _proxyAuthority;
+    private readonly bool _sendBypassHeader;
 
-    public VertexProxyHandler(string proxyUrl, HttpMessageHandler innerHandler)
+    public VertexProxyHandler(string proxyUrl, HttpMessageHandler innerHandler, bool sendBypassHeader = false)
         : base(innerHandler)
     {
         if (string.IsNullOrWhiteSpace(proxyUrl))
             throw new ArgumentException("proxyUrl is required", nameof(proxyUrl));
         _proxyAuthority = new Uri(proxyUrl);
+        _sendBypassHeader = sendBypassHeader;
     }
 
     protected override Task<HttpResponseMessage> SendAsync(
@@ -37,6 +39,10 @@ internal sealed class VertexProxyHandler : DelegatingHandler
                 Port = _proxyAuthority.Port,
             }.Uri;
         }
+
+        if (_sendBypassHeader)
+            request.Headers.TryAddWithoutValidation("X-CC-Proxy-Bypass", "1");
+
         return base.SendAsync(request, cancellationToken);
     }
 }

@@ -121,12 +121,43 @@ $ServiceName = $config.service_name
 $InstalledExe = Join-Path $InstallDir "SecondBrain.Mcp.exe"
 
 # Register/replace service
-$existingService = sc.exe query $ServiceName 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Service '$ServiceName' already exists. Stopping and removing..."
-    net stop $ServiceName 2>$null
-    sc.exe delete $ServiceName
-    Start-Sleep -Seconds 2
+$existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($existingService) {
+    Write-Host ""
+    Write-Host "  '$ServiceName' is already installed." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Proceeding will:" -ForegroundColor Yellow
+    Write-Host "    - Stop and remove the running service" -ForegroundColor Yellow
+    Write-Host "    - Redeploy all binaries" -ForegroundColor Yellow
+    Write-Host "    - Reset mcp_config.json (your configured paths and settings may be lost)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  If you only want to update the binaries, use update.ps1 instead." -ForegroundColor Cyan
+    Write-Host "  update.ps1 preserves your mcp_config.json and does not reset configuration." -ForegroundColor Cyan
+    Write-Host ""
+    $confirm = Read-Host "  Type 'yes' to proceed with full reinstall, or press Enter to cancel"
+    if ($confirm -ne 'yes') {
+        Write-Host ""
+        Write-Host "Cancelled. Run update.ps1 to rebuild and redeploy without touching your configuration." -ForegroundColor Green
+        exit 0
+    }
+    Write-Host ""
+
+    if ($existingService.Status -eq 'Running') {
+        Write-Host "Stopping existing service '$ServiceName'..."
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "Removing existing service '$ServiceName'..."
+    sc.exe delete $ServiceName | Out-Null
+
+    $timeout = 15
+    while ((Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) -and $timeout -gt 0) {
+        Start-Sleep -Seconds 1
+        $timeout--
+    }
+    if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+        Write-Error "Service '$ServiceName' is still present after delete (may be marked for deletion). Close any open handles or reboot, then re-run."
+        exit 1
+    }
 }
 
 Write-Host "Registering service '$ServiceName'..."

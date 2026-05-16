@@ -56,6 +56,37 @@ if (Test-Path $RepoSystemPrompt) {
     Write-Host "No repo system_prompt.md found; deployed prompt unchanged"
 }
 
+# Merge any new keys from the repo template into the live config.
+# Only adds keys that are absent; existing values are never overwritten.
+function Merge-MissingKeys {
+    param([PSCustomObject]$Live, [PSCustomObject]$Template)
+    foreach ($key in ($Template | Get-Member -MemberType NoteProperty).Name) {
+        if (-not ($Live | Get-Member -MemberType NoteProperty -Name $key -ErrorAction SilentlyContinue)) {
+            $Live | Add-Member -MemberType NoteProperty -Name $key -Value $Template.$key
+            Write-Host "  + $key"
+        } elseif ($Template.$key -is [PSCustomObject] -and $Live.$key -is [PSCustomObject]) {
+            Merge-MissingKeys -Live $Live.$key -Template $Template.$key
+        }
+    }
+}
+
+$RepoConfigTemplate = Join-Path $RepoRoot "config" "mcp_config.json"
+if (Test-Path $RepoConfigTemplate) {
+    $BackupDir = Join-Path $InstallDir "config-backups"
+    if (-not (Test-Path $BackupDir)) { New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null }
+    $timestamp  = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backupFile = Join-Path $BackupDir "mcp_config.$timestamp.json"
+    Copy-Item $ConfigFile $backupFile -Force
+    Write-Host "Config backed up to $backupFile"
+
+    $liveConfig     = Get-Content $ConfigFile -Raw | ConvertFrom-Json
+    $templateConfig = Get-Content $RepoConfigTemplate -Raw | ConvertFrom-Json
+    Write-Host "Merging new config keys from template..."
+    Merge-MissingKeys -Live $liveConfig -Template $templateConfig
+    $liveConfig | ConvertTo-Json -Depth 10 | Set-Content $ConfigFile -Encoding UTF8
+    Write-Host "Config merge complete."
+}
+
 Write-Host "Starting service '$ServiceName'..."
 net start $ServiceName
 
