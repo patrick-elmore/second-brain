@@ -54,6 +54,8 @@ If you find something, either generalize it (replace with a placeholder), move i
 
 The existing template/live pattern (see [Templates and live overrides](README.md#templates-and-live-overrides) in the README) is the standard mechanism: anything personal lives in a gitignored live file; the committed template is generic and bootstraps the live file on first run. When adding new personal-data surfaces, extend that pattern rather than inventing a new one.
 
+Always stage files with a separate `git add` before committing — never chain `git add && git commit` in one command. The hook fires on any Bash command containing `git commit` and will deny the entire compound command, including the add.
+
 Before committing, run `git diff --cached` and evaluate the staged diff for all of the above, plus API keys, tokens, secrets, and passwords. If the diff is clean, prefix the commit command with `COMMIT_SCANNED=1`:
 
 ```
