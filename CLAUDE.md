@@ -2,6 +2,10 @@
 
 Project instructions for the Second Brain MCP server.
 
+## Git
+
+Use `git` (not `git.exe`) for all commands in this repo. The WSL path is accessible directly — no Windows path translation needed.
+
 ## Configuration over hardcoded values
 
 Tunable values must come from configuration, not hardcoded constants in code. The pattern:
