@@ -27,6 +27,10 @@ Generic replacements to default to:
 
 This applies everywhere in committed files: C# string literals, SQL query strings, prompt templates, XML/JSON examples, markdown docs, and test data. The commit scan is a safety net — genericizing at write time is the correct prevention.
 
+## Plans
+
+Write plans to `.context/plans/` in the repo root. No need to ask.
+
 ## Scan commits for personal or identifying content
 
 This is a public repo. Before any `git commit`, scan the staged diff for content that ties the commit to a specific person, employer, project, or local environment. The concern isn't security — it's keeping the repo clean and portable for anyone reading or forking it.
@@ -49,3 +53,11 @@ Where to look:
 If you find something, either generalize it (replace with a placeholder), move it to a gitignored location (`Prompts.local/`, `config/<live>.json`, `.context/`), or pull it from the commit. Templates committed to source control should describe the *shape* of personal data, never carry the data itself.
 
 The existing template/live pattern (see [Templates and live overrides](README.md#templates-and-live-overrides) in the README) is the standard mechanism: anything personal lives in a gitignored live file; the committed template is generic and bootstraps the live file on first run. When adding new personal-data surfaces, extend that pattern rather than inventing a new one.
+
+Before committing, run `git diff --cached` and evaluate the staged diff for all of the above, plus API keys, tokens, secrets, and passwords. If the diff is clean, prefix the commit command with `COMMIT_SCANNED=1`:
+
+```
+COMMIT_SCANNED=1 git commit -m "message"
+```
+
+A project hook enforces this — any commit command without the prefix will be blocked and the reason injected back into context.
