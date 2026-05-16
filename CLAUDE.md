@@ -2,9 +2,7 @@
 
 Project instructions for the Second Brain MCP server.
 
-## Git
-
-Use `git` (not `git.exe`) for all commands in this repo. The WSL path is accessible directly — no Windows path translation needed.
+@CLAUDE-LOCAL.md
 
 ## Configuration over hardcoded values
 

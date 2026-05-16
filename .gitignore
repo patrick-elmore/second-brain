@@ -32,3 +32,6 @@ alias-mining/
 
 # Playwright MCP runtime artifacts
 .playwright-mcp/
+
+# Local machine-specific Claude instructions
+CLAUDE-LOCAL.md
